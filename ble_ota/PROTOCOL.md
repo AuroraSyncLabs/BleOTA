@@ -1,0 +1,78 @@
+# BLE OTA protocol
+
+All multi-byte fields are little-endian.
+
+## GATT
+
+Service `0x8018`. Every characteristic requires an encrypted (bonded) link.
+
+| UUID     | Name     | Properties                    | Use                        |
+|----------|----------|-------------------------------|----------------------------|
+| `0x8020` | RECV_FW  | Write, Write No Rsp, Indicate | Firmware data, sector acks |
+| `0x8021` | STATUS   | Read, Indicate                | Unused                     |
+| `0x8022` | COMMAND  | Write, Indicate               | START / STOP, command acks |
+| `0x8023` | CUSTOMER | Write, Indicate               | Unused                     |
+
+Subscribe (CCCD) to RECV_FW and COMMAND before starting.
+
+## Flow
+
+1. Connect, bond, request MTU 517, subscribe.
+2. Write START on COMMAND, wait for its ack. Refused: stop.
+3. Send the firmware in 4096-byte sectors (the last one may be shorter). After each sector, wait for its ack:
+   - `0x0000`: send the next sector.
+   - `0x0002`: resend from the sector given in the ack.
+4. Write STOP on COMMAND, wait for its ack (sent once the image is verified, can take a few seconds).
+   - Accepted: the device reboots into the new firmware.
+   - Refused: the update failed, nothing changed.
+5. Reconnect and check the firmware version.
+
+A disconnect aborts the transfer: restart from START.
+
+## Command (write on COMMAND, 20 bytes)
+
+| Bytes  | Field                                   |
+|--------|-----------------------------------------|
+| 0–1    | Command: `0x0001` START, `0x0002` STOP  |
+| 2–5    | START only: file length (u32)           |
+| 6–17   | `0x00`                                  |
+| 18–19  | CRC16 of bytes 0–17 (not checked)       |
+
+With pre-encrypted OTA, the length is the size of the encrypted file.
+
+## Command ack (indication on COMMAND, 20 bytes)
+
+| Bytes  | Field                                   |
+|--------|-----------------------------------------|
+| 0–1    | `0x0003`                                |
+| 2–3    | Acked command (`0x0001` / `0x0002`)     |
+| 4–5    | `0x0000` accepted, `0x0001` refused     |
+| 6–17   | `0x00`                                  |
+| 18–19  | CRC16 of bytes 0–17                     |
+
+## Firmware packet (write on RECV_FW)
+
+A sector is split into packets of at most MTU − 3 bytes:
+
+| Bytes  | Field                                                          |
+|--------|----------------------------------------------------------------|
+| 0–1    | Sector index, from 0 (the last sector may use `0xFFFF`)        |
+| 2      | Packet index in the sector, from 0; `0xFF` for the last packet |
+| 3–     | Firmware data                                                  |
+| last 2 | Last packet only: CRC16 of the sector (not checked)            |
+
+Packets of a sector must arrive in order. A missing or out-of-order packet makes the device ask for the whole sector again.
+
+## Sector ack (indication on RECV_FW, 20 bytes)
+
+| Bytes  | Field                                              |
+|--------|----------------------------------------------------|
+| 0–1    | Sector index received                              |
+| 2–3    | `0x0000` stored, `0x0002` resend                   |
+| 4–5    | Resend only: sector index to send next             |
+| 6–17   | `0x00`                                             |
+| 18–19  | CRC16 of bytes 0–17                                |
+
+## CRC16
+
+CRC16-CCITT: polynomial `0x1021`, initial value `0x0000`, no reflection, no final XOR.
