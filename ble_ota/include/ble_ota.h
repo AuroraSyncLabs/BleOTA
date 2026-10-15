@@ -9,6 +9,11 @@
 #ifndef _BLE_OTA_H_
 #define _BLE_OTA_H_
 
+#include "esp_err.h"
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+
 #ifdef CONFIG_PRE_ENC_OTA
 #include "esp_encrypted_img.h"
 #endif
@@ -32,6 +37,38 @@ typedef void (*esp_ble_ota_recv_fw_cb_t)(uint8_t *buf, uint32_t length);
  * esp_encrypted_img_decrypt_abort()).
  */
 typedef void (*esp_ble_ota_abort_cb_t)(void);
+
+/**
+ * @brief BLE OTA start callback function type
+ *
+ * Called from the NimBLE host task when the peer sends the START command.
+ * Return an error to refuse the transfer: the START ack then reports
+ * "refused" and no firmware data is accepted.
+ *
+ * @param fw_length : firmware length announced by the peer (decrypted size
+ *                    under CONFIG_PRE_ENC_OTA).
+ */
+typedef esp_err_t (*esp_ble_ota_start_cb_t)(uint32_t fw_length);
+
+/**
+ * @brief BLE OTA sector callback function type
+ *
+ * Same as esp_ble_ota_recv_fw_cb_t, but the application reports whether it
+ * stored the sector. On error the sector is NACKed and the peer resends it.
+ *
+ * @param buf : The pointer to the sector data.
+ * @param length : The length of the sector data.
+ */
+typedef esp_err_t (*esp_ble_ota_sector_cb_t)(uint8_t *buf, uint32_t length);
+
+/**
+ * @brief BLE OTA end callback function type
+ *
+ * Called from the NimBLE host task when the peer sends the STOP command. The
+ * STOP ack is held back until the application calls esp_ble_ota_end_ack(),
+ * so the peer learns whether the image was accepted.
+ */
+typedef void (*esp_ble_ota_end_cb_t)(void);
 
 /**
  * @brief BLE OTA callback functions struct
@@ -181,9 +218,9 @@ void esp_ble_ota_on_disconnect(void);
  * @brief           Forward BLE_GAP_EVENT_SUBSCRIBE to the OTA profile
  *
  * @param[in]       attr_handle : event->subscribe.attr_handle.
- * @param[in]       indicate : event->subscribe.cur_indicate.
+ * @param[in]       notify : event->subscribe.cur_notify.
  */
-void esp_ble_ota_on_subscribe(uint16_t attr_handle, bool indicate);
+void esp_ble_ota_on_subscribe(uint16_t attr_handle, bool notify);
 
 /**
  * @brief           Set the callback invoked when the link drops during an OTA
@@ -194,6 +231,60 @@ void esp_ble_ota_on_subscribe(uint16_t attr_handle, bool indicate);
  *                  - ESP_OK: success
  */
 esp_err_t esp_ble_ota_set_abort_cb(esp_ble_ota_abort_cb_t callback);
+
+/**
+ * @brief           Set the callback invoked when the peer sends START
+ *
+ * @param[in]       callback : application callback, or NULL to clear it.
+ *
+ * @return
+ *                  - ESP_OK: success
+ */
+esp_err_t esp_ble_ota_set_start_cb(esp_ble_ota_start_cb_t callback);
+
+/**
+ * @brief           Set the callback receiving each firmware sector
+ *
+ * When set, it is used instead of the callback registered with
+ * esp_ble_ota_recv_fw_data_callback(). Under CONFIG_PRE_ENC_OTA a sector whose
+ * plaintext was refused cannot be resent (the AES-GCM state already advanced),
+ * so the transfer must then be aborted.
+ *
+ * @param[in]       callback : application callback, or NULL to clear it.
+ *
+ * @return
+ *                  - ESP_OK: success
+ */
+esp_err_t esp_ble_ota_set_sector_cb(esp_ble_ota_sector_cb_t callback);
+
+/**
+ * @brief           Set the callback invoked when the peer sends STOP
+ *
+ * When set, the STOP ack is deferred until esp_ble_ota_end_ack() is called.
+ *
+ * @param[in]       callback : application callback, or NULL to clear it.
+ *
+ * @return
+ *                  - ESP_OK: success
+ */
+esp_err_t esp_ble_ota_set_end_cb(esp_ble_ota_end_cb_t callback);
+
+/**
+ * @brief           Send the deferred STOP ack
+ *
+ * Call once the image has been verified (e.g. after esp_ota_end()). May be
+ * called from any task.
+ *
+ * @param[in]       result : ESP_OK to accept the image, any error to report
+ *                           it as refused.
+ *
+ * @return
+ *                  - ESP_OK: ack sent
+ *                  - ESP_ERR_INVALID_STATE: no STOP ack pending (none received,
+ *                    already acked, or the link dropped)
+ *                  - ESP_FAIL: the notification could not be sent
+ */
+esp_err_t esp_ble_ota_end_ack(esp_err_t result);
 #endif /* !CONFIG_OTA_WITH_PROTOCOMM */
 
 #endif

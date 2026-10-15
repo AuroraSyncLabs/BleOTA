@@ -8,12 +8,12 @@ Service `0x8018`. Every characteristic requires an encrypted (bonded) link.
 
 | UUID     | Name     | Properties                    | Use                        |
 |----------|----------|-------------------------------|----------------------------|
-| `0x8020` | RECV_FW  | Write, Write No Rsp, Indicate | Firmware data, sector acks |
-| `0x8021` | STATUS   | Read, Indicate                | Unused                     |
-| `0x8022` | COMMAND  | Write, Indicate               | START / STOP, command acks |
-| `0x8023` | CUSTOMER | Write, Indicate               | Unused                     |
+| `0x8020` | RECV_FW  | Write, Write No Rsp, Notify   | Firmware data, sector acks |
+| `0x8021` | STATUS   | Read, Notify                  | Unused                     |
+| `0x8022` | COMMAND  | Write, Notify                 | START / STOP, command acks |
+| `0x8023` | CUSTOMER | Write, Notify                 | Unused                     |
 
-Subscribe (CCCD) to RECV_FW and COMMAND before starting.
+Enable notifications (CCCD `0x0001`) on RECV_FW and COMMAND before starting.
 
 ## Flow
 
@@ -40,7 +40,7 @@ A disconnect aborts the transfer: restart from START.
 
 With pre-encrypted OTA, the length is the size of the encrypted file.
 
-## Command ack (indication on COMMAND, 20 bytes)
+## Command ack (notification on COMMAND, 20 bytes)
 
 | Bytes  | Field                                   |
 |--------|-----------------------------------------|
@@ -63,7 +63,7 @@ A sector is split into packets of at most MTU − 3 bytes:
 
 Packets of a sector must arrive in order. A missing or out-of-order packet makes the device ask for the whole sector again.
 
-## Sector ack (indication on RECV_FW, 20 bytes)
+## Sector ack (notification on RECV_FW, 20 bytes)
 
 | Bytes  | Field                                              |
 |--------|----------------------------------------------------|

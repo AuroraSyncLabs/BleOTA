@@ -9,6 +9,7 @@
 /* BLE */
 #include "ble_ota.h"
 #include "console/console.h"
+#include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "host/ble_hs.h"
 #include "host/ble_uuid.h"
@@ -102,6 +103,14 @@ static uint8_t own_addr_type;
 #endif
 
 static esp_ble_ota_abort_cb_t ota_abort_cb = NULL;
+static esp_ble_ota_start_cb_t ota_start_cb = NULL;
+static esp_ble_ota_sector_cb_t ota_sector_cb = NULL;
+static esp_ble_ota_end_cb_t ota_end_cb = NULL;
+
+/* STOP ack deferred until esp_ble_ota_end_ack() (only with an end callback). */
+static portMUX_TYPE end_ack_lock = portMUX_INITIALIZER_UNLOCKED;
+static bool end_ack_pending = false;
+static uint16_t end_ack_attr_handle;
 
 static uint16_t connection_handle;
 static uint16_t attribute_handle;
@@ -364,6 +373,34 @@ write_ota_data:
 #endif
             return derr;
         }
+#else
+        esp_err_t ferr = esp_ble_ota_recv_fw_handler(
+            fw_buf, fw_buf_offset < ota_block_size ? fw_buf_offset : 4096
+        );
+        if (ferr != ESP_OK) {
+            /* The application could not store the sector: ask for it again. */
+            ESP_LOGW(
+                TAG, "%s: sector %" PRIu32 " refused: %s", __func__, cur_sector,
+                esp_err_to_name(ferr)
+            );
+            fw_buf_offset = 0;
+            memset(fw_buf, 0x0, ota_block_size);
+            cur_packet = 0;
+            sector_sequence_error = false;
+#ifndef CONFIG_OTA_WITH_PROTOCOMM
+            cmd_ack[0] = om->om_data[0];
+            cmd_ack[1] = om->om_data[1];
+            cmd_ack[2] = 0x02;
+            cmd_ack[3] = 0x00;
+            cmd_ack[4] = cur_sector & 0xff;
+            cmd_ack[5] = (cur_sector & 0xff00) >> 8;
+            crc16 = crc16_ccitt(cmd_ack, 18);
+            cmd_ack[18] = crc16 & 0xff;
+            cmd_ack[19] = (crc16 & 0xff00) >> 8;
+            esp_ble_ota_notification_data(connection_handle, attribute_handle, cmd_ack, ota_char);
+#endif
+            return ferr;
+        }
 #endif
         cur_packet = 0;
         cur_sector++;
@@ -376,13 +413,6 @@ write_ota_data:
     return ESP_OK;
 
 sector_end:
-#ifndef CONFIG_PRE_ENC_OTA
-    if (fw_buf_offset < ota_block_size)
-        esp_ble_ota_recv_fw_handler(fw_buf, fw_buf_offset);
-    else
-        esp_ble_ota_recv_fw_handler(fw_buf, 4096);
-#endif
-
     fw_buf_offset = 0;
     memset(fw_buf, 0x0, ota_block_size);
     sector_sequence_error = false;
@@ -431,6 +461,10 @@ unsigned int esp_ble_ota_get_fw_length(void)
 
 static esp_err_t esp_ble_ota_recv_fw_handler(uint8_t *buf, uint32_t length)
 {
+#ifndef CONFIG_OTA_WITH_PROTOCOMM
+    if (ota_sector_cb)
+        return ota_sector_cb(buf, length);
+#endif
     if (ota_cb_fun_t.recv_fw_cb)
         ota_cb_fun_t.recv_fw_cb(buf, length);
 
@@ -503,15 +537,38 @@ static void ble_ota_start_write_chr(struct os_mbuf *om)
 
     esp_ble_ota_char_t ota_char = find_ota_char_and_desr_by_handle(attribute_handle);
     if ((om->om_data[0] == 0x01) && (om->om_data[1] == 0x00)) {
-        start_ota = true;
-
-        ota_total_len = (om->om_data[2]) + (om->om_data[3] * 256) + (om->om_data[4] * 256 * 256) +
-                        (om->om_data[5] * 256 * 256 * 256);
+        uint32_t fw_length = (om->om_data[2]) + (om->om_data[3] * 256) +
+                             (om->om_data[4] * 256 * 256) + (om->om_data[5] * 256 * 256 * 256);
 
 #ifdef CONFIG_PRE_ENC_OTA
-        ota_total_len -= ENC_HEADER;
+        fw_length -= ENC_HEADER;
 #endif
-        ESP_LOGI(TAG, "recv ota start cmd, fw_length = %" PRIu32 "", ota_total_len);
+        ESP_LOGI(TAG, "recv ota start cmd, fw_length = %" PRIu32 "", fw_length);
+
+        /* A new transfer supersedes a STOP the application never acked. */
+        taskENTER_CRITICAL(&end_ack_lock);
+        end_ack_pending = false;
+        taskEXIT_CRITICAL(&end_ack_lock);
+
+        if (ota_start_cb && ota_start_cb(fw_length) != ESP_OK) {
+            ESP_LOGW(TAG, "ota start refused by the application");
+            start_ota = false;
+            ota_total_len = 0;
+            free(fw_buf);
+            fw_buf = NULL;
+            cmd_ack[2] = 0x01;
+            cmd_ack[3] = 0x00;
+            cmd_ack[4] = 0x01; /* refused */
+            cmd_ack[5] = 0x00;
+            crc16 = crc16_ccitt(cmd_ack, 18);
+            cmd_ack[18] = crc16 & 0xff;
+            cmd_ack[19] = (crc16 & 0xff00) >> 8;
+            esp_ble_ota_notification_data(connection_handle, attribute_handle, cmd_ack, ota_char);
+            return;
+        }
+
+        start_ota = true;
+        ota_total_len = fw_length;
 
         sector_sequence_error = false;
         cur_sector = 0;
@@ -548,18 +605,29 @@ static void ble_ota_start_write_chr(struct os_mbuf *om)
         xSemaphoreGive(notify_sem);
 
         ESP_LOGD(TAG, "recv ota stop cmd");
-        cmd_ack[2] = 0x02;
-        cmd_ack[3] = 0x00;
-        crc16 = crc16_ccitt(cmd_ack, 18);
-        cmd_ack[18] = crc16 & 0xff;
-        cmd_ack[19] = (crc16 & 0xff00) >> 8;
-        esp_ble_ota_notification_data(connection_handle, attribute_handle, cmd_ack, ota_char);
         sector_sequence_error = false;
         cur_sector = 0;
         cur_packet = 0;
         fw_buf_offset = 0;
         free(fw_buf);
         fw_buf = NULL;
+
+        if (ota_end_cb) {
+            /* The application acks once it has verified the image. */
+            taskENTER_CRITICAL(&end_ack_lock);
+            end_ack_pending = true;
+            end_ack_attr_handle = attribute_handle;
+            taskEXIT_CRITICAL(&end_ack_lock);
+            ota_end_cb();
+            return;
+        }
+
+        cmd_ack[2] = 0x02;
+        cmd_ack[3] = 0x00;
+        crc16 = crc16_ccitt(cmd_ack, 18);
+        cmd_ack[18] = crc16 & 0xff;
+        cmd_ack[19] = (crc16 & 0xff00) >> 8;
+        esp_ble_ota_notification_data(connection_handle, attribute_handle, cmd_ack, ota_char);
     }
 }
 
@@ -659,7 +727,7 @@ static const struct ble_gatt_svc_def ota_gatt_db[] = {
                     .uuid = BLE_UUID16_DECLARE(RECV_FW_UUID),
                     .access_cb = ble_ota_gatt_handler,
                     .val_handle = &receive_fw_val,
-                    .flags = BLE_GATT_CHR_F_INDICATE | BLE_GATT_CHR_F_WRITE |
+                    .flags = BLE_GATT_CHR_F_NOTIFY | BLE_GATT_CHR_F_WRITE |
                              BLE_GATT_CHR_F_WRITE_NO_RSP | BLE_OTA_CHR_F_ENC,
                 },
                 {
@@ -667,21 +735,21 @@ static const struct ble_gatt_svc_def ota_gatt_db[] = {
                     .uuid = BLE_UUID16_DECLARE(OTA_BAR_UUID),
                     .access_cb = ble_ota_gatt_handler,
                     .val_handle = &ota_status_val,
-                    .flags = BLE_GATT_CHR_F_INDICATE | BLE_GATT_CHR_F_READ | BLE_OTA_CHR_F_ENC,
+                    .flags = BLE_GATT_CHR_F_NOTIFY | BLE_GATT_CHR_F_READ | BLE_OTA_CHR_F_ENC,
                 },
                 {
                     /* Command Characteristic */
                     .uuid = BLE_UUID16_DECLARE(COMMAND_UUID),
                     .access_cb = ble_ota_gatt_handler,
                     .val_handle = &command_val,
-                    .flags = BLE_GATT_CHR_F_INDICATE | BLE_GATT_CHR_F_WRITE | BLE_OTA_CHR_F_ENC,
+                    .flags = BLE_GATT_CHR_F_NOTIFY | BLE_GATT_CHR_F_WRITE | BLE_OTA_CHR_F_ENC,
                 },
                 {
                     /* Customer characteristic */
                     .uuid = BLE_UUID16_DECLARE(CUSTOMER_UUID),
                     .access_cb = ble_ota_gatt_handler,
                     .val_handle = &custom_val,
-                    .flags = BLE_GATT_CHR_F_INDICATE | BLE_GATT_CHR_F_WRITE | BLE_OTA_CHR_F_ENC,
+                    .flags = BLE_GATT_CHR_F_NOTIFY | BLE_GATT_CHR_F_WRITE | BLE_OTA_CHR_F_ENC,
                 },
                 {
                     0, /* No more characteristics in this service */
@@ -731,7 +799,6 @@ static int esp_ble_ota_notification_data(
     struct os_mbuf *txom;
     bool notify_enable = false;
     int rc;
-    txom = ble_hs_mbuf_from_flat(cmd_ack, CMD_ACK_LENGTH);
 
     switch (ota_char) {
     case RECV_FW_CHAR:
@@ -755,6 +822,10 @@ static int esp_ble_ota_notification_data(
     }
 
     if (notify_enable) {
+        /* Allocate only when sending: an unsent mbuf would leak from the pool. */
+        txom = ble_hs_mbuf_from_flat(cmd_ack, CMD_ACK_LENGTH);
+        if (txom == NULL)
+            return BLE_HS_ENOMEM;
         rc = ble_gattc_notify_custom(conn_handle, attr_handle, txom);
         if (rc == 0)
             ESP_LOGD(TAG, "Notification sent, attr_handle = %d", attr_handle);
@@ -808,6 +879,50 @@ esp_err_t esp_ble_ota_set_abort_cb(esp_ble_ota_abort_cb_t callback)
     return ESP_OK;
 }
 
+esp_err_t esp_ble_ota_set_start_cb(esp_ble_ota_start_cb_t callback)
+{
+    ota_start_cb = callback;
+    return ESP_OK;
+}
+
+esp_err_t esp_ble_ota_set_sector_cb(esp_ble_ota_sector_cb_t callback)
+{
+    ota_sector_cb = callback;
+    return ESP_OK;
+}
+
+esp_err_t esp_ble_ota_set_end_cb(esp_ble_ota_end_cb_t callback)
+{
+    ota_end_cb = callback;
+    return ESP_OK;
+}
+
+esp_err_t esp_ble_ota_end_ack(esp_err_t result)
+{
+    uint8_t cmd_ack[CMD_ACK_LENGTH] = {0x03, 0x00, 0x02, 0x00};
+    uint16_t attr_handle;
+    uint16_t crc16;
+    bool pending;
+
+    taskENTER_CRITICAL(&end_ack_lock);
+    pending = end_ack_pending;
+    attr_handle = end_ack_attr_handle;
+    end_ack_pending = false;
+    taskEXIT_CRITICAL(&end_ack_lock);
+    if (!pending)
+        return ESP_ERR_INVALID_STATE;
+
+    cmd_ack[4] = result == ESP_OK ? 0x00 : 0x01; /* accepted / refused */
+    crc16 = crc16_ccitt(cmd_ack, 18);
+    cmd_ack[18] = crc16 & 0xff;
+    cmd_ack[19] = (crc16 & 0xff00) >> 8;
+    if (esp_ble_ota_notification_data(
+            connection_handle, attr_handle, cmd_ack, find_ota_char_and_desr_by_handle(attr_handle)
+        ) != 0)
+        return ESP_FAIL;
+    return ESP_OK;
+}
+
 void esp_ble_ota_on_connect(uint16_t conn_handle)
 {
     connection_handle = conn_handle;
@@ -825,6 +940,10 @@ void esp_ble_ota_on_disconnect(void)
         ota_total_len = 0;
         xSemaphoreGive(notify_sem);
     }
+
+    taskENTER_CRITICAL(&end_ack_lock);
+    end_ack_pending = false;
+    taskEXIT_CRITICAL(&end_ack_lock);
 
     sector_sequence_error = false;
     cur_sector = 0;
@@ -845,22 +964,22 @@ void esp_ble_ota_on_disconnect(void)
     }
 }
 
-void esp_ble_ota_on_subscribe(uint16_t attr_handle, bool indicate)
+void esp_ble_ota_on_subscribe(uint16_t attr_handle, bool notify)
 {
     esp_ble_ota_char_t ota_char = find_ota_char_and_desr_by_handle(attr_handle);
 
     switch (ota_char) {
     case RECV_FW_CHAR:
-        ota_notification.recv_fw_ntf_enable = indicate;
+        ota_notification.recv_fw_ntf_enable = notify;
         break;
     case OTA_STATUS_CHAR:
-        ota_notification.process_bar_ntf_enable = indicate;
+        ota_notification.process_bar_ntf_enable = notify;
         break;
     case CMD_CHAR:
-        ota_notification.command_ntf_enable = indicate;
+        ota_notification.command_ntf_enable = notify;
         break;
     case CUS_CHAR:
-        ota_notification.customer_ntf_enable = indicate;
+        ota_notification.customer_ntf_enable = notify;
         break;
     case INVALID_CHAR:
         break;
@@ -1111,7 +1230,7 @@ static int esp_ble_ota_gap_event(struct ble_gap_event *event, void *arg)
             event->subscribe.prev_indicate, event->subscribe.cur_indicate
         );
 
-        esp_ble_ota_on_subscribe(event->subscribe.attr_handle, event->subscribe.cur_indicate);
+        esp_ble_ota_on_subscribe(event->subscribe.attr_handle, event->subscribe.cur_notify);
         return 0;
 
     case BLE_GAP_EVENT_MTU:
