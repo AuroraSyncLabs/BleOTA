@@ -190,6 +190,21 @@ void esp_ble_ota_set_sizes(size_t file_size, size_t block_size);
 
 #if !CONFIG_OTA_WITH_PROTOCOMM
 #if CONFIG_BLE_OTA_EXTERNAL_HOST
+struct ble_gatt_svc_def;
+
+/**
+ * @brief           OTA GATT service table, for an application-owned NimBLE host
+ *
+ * Register it with the application's own services before ble_gatts_start(),
+ * through ble_gatts_count_cfg() and ble_gatts_add_svcs() (or the owner of the
+ * host, e.g. Matter's ConfigureExtraServices()). Counting it up front sizes
+ * the NimBLE client configuration pool for its characteristics.
+ *
+ * @return          The service table, terminated by an empty entry.
+ */
+const struct ble_gatt_svc_def *esp_ble_ota_gatt_svcs(void);
+
+#if CONFIG_BT_NIMBLE_DYNAMIC_SERVICE
 /**
  * @brief           Register the OTA GATT service on an application-owned NimBLE
  * host
@@ -199,11 +214,17 @@ void esp_ble_ota_set_sizes(size_t file_size, size_t block_size);
  * and before advertising starts (NimBLE refuses to change services while
  * connected or advertising).
  *
+ * NimBLE sizes its client configuration pool when the GATT server starts:
+ * notifying characteristics added later can exhaust it, after which
+ * connectable advertising fails with BLE_HS_ENOMEM. Prefer
+ * esp_ble_ota_gatt_svcs() when the services can be registered up front.
+ *
  * @return
  *                  - ESP_OK: success
  *                  - ESP_FAIL: service registration failed
  */
 esp_err_t esp_ble_ota_gatt_register(void);
+#endif
 #endif
 
 /**

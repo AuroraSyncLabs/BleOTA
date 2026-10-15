@@ -29,8 +29,9 @@ menu "OTA Manager"
         default n
         help
             The component no longer initializes NimBLE, sets the device name, advertises or
-            handles GAP events. The application registers the OTA service with
-            esp_ble_ota_gatt_register() and forwards connect, disconnect and subscribe events
-            through esp_ble_ota_on_connect(), esp_ble_ota_on_disconnect() and
-            esp_ble_ota_on_subscribe(). Requires CONFIG_BT_NIMBLE_DYNAMIC_SERVICE.
+            handles GAP events. The application registers the OTA service from
+            esp_ble_ota_gatt_svcs() before the GATT server starts (or with
+            esp_ble_ota_gatt_register() under CONFIG_BT_NIMBLE_DYNAMIC_SERVICE) and forwards
+            connect, disconnect and subscribe events through esp_ble_ota_on_connect(),
+            esp_ble_ota_on_disconnect() and esp_ble_ota_on_subscribe().
 endmenu

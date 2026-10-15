@@ -21,9 +21,13 @@ idf.py add-dependency aurorasynclabs/ble_ota
 To run on your own NimBLE host, set in `sdkconfig.defaults`:
 
 ```
-CONFIG_BT_NIMBLE_DYNAMIC_SERVICE=y
 CONFIG_BLE_OTA_EXTERNAL_HOST=y
 ```
+
+Then register the table from `esp_ble_ota_gatt_svcs()` with your own services before the GATT server
+starts. `esp_ble_ota_gatt_register()` adds it later instead, but needs
+`CONFIG_BT_NIMBLE_DYNAMIC_SERVICE=y` and can exhaust the NimBLE client configuration pool (see
+`ble_ota.h`).
 
 | Documentation   | Where                                                    |
 |-----------------|----------------------------------------------------------|

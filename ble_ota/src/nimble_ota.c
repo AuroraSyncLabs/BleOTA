@@ -937,11 +937,12 @@ static void esp_ble_ota_fill_handle_table(void)
 }
 
 #if CONFIG_BLE_OTA_EXTERNAL_HOST
-#if !MYNEWT_VAL(BLE_DYNAMIC_SERVICE)
-#error                                                                                             \
-    "CONFIG_BLE_OTA_EXTERNAL_HOST requires NimBLE dynamic services (CONFIG_BT_NIMBLE_DYNAMIC_SERVICE)"
-#endif
+const struct ble_gatt_svc_def *esp_ble_ota_gatt_svcs(void)
+{
+    return ota_gatt_db;
+}
 
+#if MYNEWT_VAL(BLE_DYNAMIC_SERVICE)
 esp_err_t esp_ble_ota_gatt_register(void)
 {
     int rc = ble_gatts_add_dynamic_svcs(ota_gatt_db);
@@ -960,6 +961,7 @@ esp_err_t esp_ble_ota_gatt_register(void)
     );
     return ESP_OK;
 }
+#endif /* MYNEWT_VAL(BLE_DYNAMIC_SERVICE) */
 #endif
 
 esp_err_t esp_ble_ota_set_abort_cb(esp_ble_ota_abort_cb_t callback)
