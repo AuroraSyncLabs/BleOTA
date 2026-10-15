@@ -10,6 +10,11 @@ endif()
 if(CONFIG_BT_NIMBLE_ENABLED)
     list(APPEND srcs "src/nimble_ota.c")
 
+    # ble_ota.h includes esp_encrypted_img.h.
+    if(CONFIG_PRE_ENC_OTA)
+        list(APPEND requires espressif__esp_encrypted_img)
+    endif()
+
     if(CONFIG_OTA_WITH_PROTOCOMM)
         list(APPEND srcs
             "src/scheme_ble.c"

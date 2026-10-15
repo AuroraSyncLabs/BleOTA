@@ -32,9 +32,11 @@ typedef void (*esp_ble_ota_recv_fw_cb_t)(uint8_t *buf, uint32_t length);
 /**
  * @brief BLE OTA abort callback function type
  *
- * Called when the link drops while an OTA is in progress, so the
- * application can release its own OTA state (e.g. esp_ota_abort() or
- * esp_encrypted_img_decrypt_abort()).
+ * Called from the NimBLE host task when an OTA in progress is dropped, so the
+ * application can release its own OTA state (e.g. esp_ota_abort()): the link
+ * dropped or, under CONFIG_PRE_ENC_OTA, a sector could not be decrypted or
+ * stored, or the image failed its authentication at STOP. The decrypt handle
+ * is released by the component.
  */
 typedef void (*esp_ble_ota_abort_cb_t)(void);
 
@@ -55,6 +57,11 @@ typedef esp_err_t (*esp_ble_ota_start_cb_t)(uint32_t fw_length);
  *
  * Same as esp_ble_ota_recv_fw_cb_t, but the application reports whether it
  * stored the sector. On error the sector is NACKed and the peer resends it.
+ *
+ * Under CONFIG_PRE_ENC_OTA the data is the decrypted firmware, in chunks of
+ * any size up to one sector. A refused chunk cannot be resent (the AES-GCM
+ * state already advanced): an error aborts the transfer, the peer is told to
+ * stop and the abort callback is called.
  *
  * @param buf : The pointer to the sector data.
  * @param length : The length of the sector data.
@@ -246,9 +253,8 @@ esp_err_t esp_ble_ota_set_start_cb(esp_ble_ota_start_cb_t callback);
  * @brief           Set the callback receiving each firmware sector
  *
  * When set, it is used instead of the callback registered with
- * esp_ble_ota_recv_fw_data_callback(). Under CONFIG_PRE_ENC_OTA a sector whose
- * plaintext was refused cannot be resent (the AES-GCM state already advanced),
- * so the transfer must then be aborted.
+ * esp_ble_ota_recv_fw_data_callback(). Under CONFIG_PRE_ENC_OTA a refused
+ * chunk aborts the transfer (see esp_ble_ota_sector_cb_t).
  *
  * @param[in]       callback : application callback, or NULL to clear it.
  *
@@ -268,6 +274,28 @@ esp_err_t esp_ble_ota_set_sector_cb(esp_ble_ota_sector_cb_t callback);
  *                  - ESP_OK: success
  */
 esp_err_t esp_ble_ota_set_end_cb(esp_ble_ota_end_cb_t callback);
+
+#ifdef CONFIG_PRE_ENC_OTA
+/**
+ * @brief           Set the key decrypting pre-encrypted images
+ *
+ * The component then opens a decrypt handle on every START and releases it
+ * on STOP, on a refused or superseded START, on a decrypt error and on
+ * disconnect. At STOP the image length and authentication tag are checked:
+ * on failure the end callback is not called, the abort callback is, and the
+ * STOP ack reports "refused".
+ *
+ * Call before the peer can connect. The configuration is copied, but the key
+ * it points to must stay valid while the component is in use.
+ *
+ * @param[in]       cfg : decrypt configuration (e.g. RSA private key in PEM).
+ *
+ * @return
+ *                  - ESP_OK: success
+ *                  - ESP_ERR_INVALID_ARG: cfg is NULL
+ */
+esp_err_t esp_ble_ota_set_decrypt_cfg(const esp_decrypt_cfg_t *cfg);
+#endif
 
 /**
  * @brief           Send the deferred STOP ack
@@ -305,6 +333,10 @@ esp_err_t esp_ble_ota_host_init(void);
  * data callback function
  *
  * @param[in]       callback : pointer to the application callback function.
+ *
+ * Under CONFIG_PRE_ENC_OTA, esp_decrypt_handle is used for the next transfer
+ * only, unless esp_ble_ota_set_decrypt_cfg() was called: the component takes
+ * ownership and releases it at STOP, on a decrypt error or on disconnect.
  *
  * @return
  *                  - ESP_OK: success

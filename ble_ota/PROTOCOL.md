@@ -22,6 +22,7 @@ Enable notifications (CCCD `0x0001`) on RECV_FW and COMMAND before starting.
 3. Send the firmware in 4096-byte sectors (the last one may be shorter). After each sector, wait for its ack:
    - `0x0000`: send the next sector.
    - `0x0002`: resend from the sector given in the ack.
+   - `0x0003`: transfer aborted (pre-encrypted OTA, the sector could not be decrypted or stored): stop.
 4. Write STOP on COMMAND, wait for its ack (sent once the image is verified, can take a few seconds).
    - Accepted: the device reboots into the new firmware.
    - Refused: the update failed, nothing changed.
@@ -38,7 +39,8 @@ A disconnect aborts the transfer: restart from START.
 | 6–17   | `0x00`                                  |
 | 18–19  | CRC16 of bytes 0–17 (not checked)       |
 
-With pre-encrypted OTA, the length is the size of the encrypted file.
+With pre-encrypted OTA, the length is the size of the encrypted file. A STOP is then refused when
+the decrypted image is incomplete or fails its authentication.
 
 ## Command ack (notification on COMMAND, 20 bytes)
 
@@ -68,7 +70,7 @@ Packets of a sector must arrive in order. A missing or out-of-order packet makes
 | Bytes  | Field                                              |
 |--------|----------------------------------------------------|
 | 0–1    | Sector index received                              |
-| 2–3    | `0x0000` stored, `0x0002` resend                   |
+| 2–3    | `0x0000` stored, `0x0002` resend, `0x0003` aborted |
 | 4–5    | Resend only: sector index to send next             |
 | 6–17   | `0x00`                                             |
 | 18–19  | CRC16 of bytes 0–17                                |

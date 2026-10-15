@@ -48,7 +48,15 @@ uint16_t os_mbuf_len(const struct os_mbuf *om)
 
 #ifdef CONFIG_PRE_ENC_OTA
 #define ENC_HEADER 512
-esp_decrypt_handle_t decrypt_handle_cmp;
+/* Decrypt handle of the current transfer, owned by the component. Opened on
+ * START from decrypt_cfg when it is set, otherwise the handle given to
+ * esp_ble_ota_recv_fw_data_callback(). */
+static esp_decrypt_handle_t decrypt_handle_cmp;
+static esp_decrypt_cfg_t decrypt_cfg;
+static bool decrypt_cfg_set = false;
+/* A sector could not be decrypted or stored: the transfer was dropped and its
+ * STOP is refused. */
+static bool pre_enc_failed = false;
 #endif
 
 #define BUF_LENGTH 4098
@@ -79,7 +87,7 @@ static const char *TAG = "NimBLE_BLE_OTA";
 static bool start_ota = false;
 static uint32_t cur_sector = 0;
 static uint32_t cur_packet = 0;
-/** Set after in-sector sequence/decrypt failure; stale EOF (0xff) is NACKed
+/** Set after an in-sector sequence failure; stale EOF (0xff) is NACKed
  * until sector is retried cleanly. */
 static bool sector_sequence_error = false;
 static uint8_t *fw_buf = NULL;
@@ -174,6 +182,35 @@ static esp_err_t ble_ota_pre_enc_flush_sector(uint8_t *cipher, size_t cipher_len
     if (err == ESP_ERR_NOT_FINISHED)
         err = ESP_OK;
     return err;
+}
+
+static void ble_ota_pre_enc_release(void)
+{
+    if (decrypt_handle_cmp != NULL) {
+        esp_encrypted_img_decrypt_abort(decrypt_handle_cmp);
+        decrypt_handle_cmp = NULL;
+    }
+}
+
+/**
+ * Drop the transfer after a sector failed to decrypt or was refused by the
+ * application: the AES-GCM state already advanced, so the sector cannot be
+ * sent again.
+ */
+static void ble_ota_pre_enc_abort_transfer(void)
+{
+    extern SemaphoreHandle_t notify_sem;
+
+    ble_ota_pre_enc_release();
+    pre_enc_failed = true;
+    xSemaphoreTake(notify_sem, portMAX_DELAY);
+    start_ota = false;
+    ota_total_len = 0;
+    xSemaphoreGive(notify_sem);
+#ifndef CONFIG_OTA_WITH_PROTOCOMM
+    if (ota_abort_cb)
+        ota_abort_cb();
+#endif
 }
 #endif
 
@@ -354,18 +391,21 @@ write_ota_data:
 #ifdef CONFIG_PRE_ENC_OTA
         esp_err_t derr = ble_ota_pre_enc_flush_sector(fw_buf, fw_buf_offset);
         if (derr != ESP_OK) {
-            ESP_LOGE(TAG, "%s: decrypt sector failed: %s", __func__, esp_err_to_name(derr));
+            /* Resending cannot help: tell the peer to stop the transfer. */
+            ESP_LOGE(
+                TAG, "%s: sector %" PRIu32 " not decrypted or not stored (%s), aborting", __func__,
+                cur_sector, esp_err_to_name(derr)
+            );
             fw_buf_offset = 0;
             memset(fw_buf, 0x0, ota_block_size);
             cur_packet = 0;
-            sector_sequence_error = true;
+            sector_sequence_error = false;
+            ble_ota_pre_enc_abort_transfer();
 #ifndef CONFIG_OTA_WITH_PROTOCOMM
             cmd_ack[0] = om->om_data[0];
             cmd_ack[1] = om->om_data[1];
-            cmd_ack[2] = 0x02;
+            cmd_ack[2] = 0x03; /* aborted */
             cmd_ack[3] = 0x00;
-            cmd_ack[4] = cur_sector & 0xff;
-            cmd_ack[5] = (cur_sector & 0xff00) >> 8;
             crc16 = crc16_ccitt(cmd_ack, 18);
             cmd_ack[18] = crc16 & 0xff;
             cmd_ack[19] = (crc16 & 0xff00) >> 8;
@@ -539,9 +579,25 @@ static void ble_ota_start_write_chr(struct os_mbuf *om)
     if ((om->om_data[0] == 0x01) && (om->om_data[1] == 0x00)) {
         uint32_t fw_length = (om->om_data[2]) + (om->om_data[3] * 256) +
                              (om->om_data[4] * 256 * 256) + (om->om_data[5] * 256 * 256 * 256);
+        esp_err_t start_err = ESP_OK;
 
 #ifdef CONFIG_PRE_ENC_OTA
-        fw_length -= ENC_HEADER;
+        pre_enc_failed = false;
+        if (fw_length <= ENC_HEADER) {
+            ESP_LOGE(TAG, "encrypted image too short (%" PRIu32 " bytes)", fw_length);
+            start_err = ESP_ERR_INVALID_SIZE;
+        } else {
+            fw_length -= ENC_HEADER;
+        }
+        /* A new START supersedes the transfer in progress and its handle. */
+        if (start_err == ESP_OK && decrypt_cfg_set) {
+            ble_ota_pre_enc_release();
+            decrypt_handle_cmp = esp_encrypted_img_decrypt_start(&decrypt_cfg);
+            if (decrypt_handle_cmp == NULL) {
+                ESP_LOGE(TAG, "cannot open the decrypt handle");
+                start_err = ESP_FAIL;
+            }
+        }
 #endif
         ESP_LOGI(TAG, "recv ota start cmd, fw_length = %" PRIu32 "", fw_length);
 
@@ -550,8 +606,14 @@ static void ble_ota_start_write_chr(struct os_mbuf *om)
         end_ack_pending = false;
         taskEXIT_CRITICAL(&end_ack_lock);
 
-        if (ota_start_cb && ota_start_cb(fw_length) != ESP_OK) {
-            ESP_LOGW(TAG, "ota start refused by the application");
+        if (start_err == ESP_OK && ota_start_cb)
+            start_err = ota_start_cb(fw_length);
+        if (start_err != ESP_OK) {
+            ESP_LOGW(TAG, "ota start refused");
+#ifdef CONFIG_PRE_ENC_OTA
+            if (decrypt_cfg_set)
+                ble_ota_pre_enc_release();
+#endif
             start_ota = false;
             ota_total_len = 0;
             free(fw_buf);
@@ -593,8 +655,18 @@ static void ble_ota_start_write_chr(struct os_mbuf *om)
     } else if ((om->om_data[0] == 0x02) && (om->om_data[1] == 0x00)) {
         printf("\nCMD_CHAR -> 0 : %d, 1 : %d", om->om_data[0], om->om_data[1]);
 #ifdef CONFIG_PRE_ENC_OTA
-        if (esp_encrypted_img_decrypt_end(decrypt_handle_cmp) != ESP_OK)
-            ESP_LOGI(TAG, "Decryption end failed");
+        bool was_running = start_ota;
+        esp_err_t decrypt_err = ESP_FAIL;
+
+        /* Checks the image length and its authentication tag, and frees the
+         * handle whatever the result. */
+        if (!pre_enc_failed && decrypt_handle_cmp != NULL) {
+            decrypt_err = esp_encrypted_img_decrypt_end(decrypt_handle_cmp);
+            decrypt_handle_cmp = NULL;
+            if (decrypt_err != ESP_OK)
+                ESP_LOGE(TAG, "encrypted image incomplete or not authentic");
+        }
+        pre_enc_failed = false;
 #endif
         extern SemaphoreHandle_t notify_sem;
         xSemaphoreTake(notify_sem, portMAX_DELAY);
@@ -611,6 +683,23 @@ static void ble_ota_start_write_chr(struct os_mbuf *om)
         fw_buf_offset = 0;
         free(fw_buf);
         fw_buf = NULL;
+
+#ifdef CONFIG_PRE_ENC_OTA
+        if (decrypt_err != ESP_OK) {
+            /* The application never sees this STOP: drop its transfer. */
+            if (was_running && ota_abort_cb)
+                ota_abort_cb();
+            cmd_ack[2] = 0x02;
+            cmd_ack[3] = 0x00;
+            cmd_ack[4] = 0x01; /* refused */
+            cmd_ack[5] = 0x00;
+            crc16 = crc16_ccitt(cmd_ack, 18);
+            cmd_ack[18] = crc16 & 0xff;
+            cmd_ack[19] = (crc16 & 0xff00) >> 8;
+            esp_ble_ota_notification_data(connection_handle, attribute_handle, cmd_ack, ota_char);
+            return;
+        }
+#endif
 
         if (ota_end_cb) {
             /* The application acks once it has verified the image. */
@@ -897,6 +986,17 @@ esp_err_t esp_ble_ota_set_end_cb(esp_ble_ota_end_cb_t callback)
     return ESP_OK;
 }
 
+#ifdef CONFIG_PRE_ENC_OTA
+esp_err_t esp_ble_ota_set_decrypt_cfg(const esp_decrypt_cfg_t *cfg)
+{
+    if (cfg == NULL)
+        return ESP_ERR_INVALID_ARG;
+    decrypt_cfg = *cfg;
+    decrypt_cfg_set = true;
+    return ESP_OK;
+}
+#endif
+
 esp_err_t esp_ble_ota_end_ack(esp_err_t result)
 {
     uint8_t cmd_ack[CMD_ACK_LENGTH] = {0x03, 0x00, 0x02, 0x00};
@@ -939,7 +1039,13 @@ void esp_ble_ota_on_disconnect(void)
         start_ota = false;
         ota_total_len = 0;
         xSemaphoreGive(notify_sem);
+#ifdef CONFIG_PRE_ENC_OTA
+        ble_ota_pre_enc_release();
+#endif
     }
+#ifdef CONFIG_PRE_ENC_OTA
+    pre_enc_failed = false;
+#endif
 
     taskENTER_CRITICAL(&end_ack_lock);
     end_ack_pending = false;
