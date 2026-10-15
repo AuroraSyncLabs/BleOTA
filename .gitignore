@@ -1,0 +1,13 @@
+**/.vscode/**
+**/.idea/**
+
+build/
+cmake-build-*/
+
+sdkconfig
+sdkconfig.old
+
+dependencies.lock
+managed_components/
+
+__pycache__/
