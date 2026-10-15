@@ -4,16 +4,16 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#include <string.h>
-#include <esp_log.h>
-#include <esp_err.h>
 #include "esp_bt.h"
+#include <esp_err.h>
+#include <esp_log.h>
+#include <string.h>
 
 #include <protocomm.h>
 #include <protocomm_ble.h>
 
-#include "scheme_ble.h"
 #include "esp_ble_ota_priv.h"
+#include "scheme_ble.h"
 
 static const char *TAG = "esp_ble_ota_scheme_ble";
 
@@ -36,7 +36,7 @@ static esp_err_t ota_start(protocomm_t *pc, void *config)
         return ESP_ERR_INVALID_ARG;
     }
 
-    protocomm_ble_config_t *ble_config = (protocomm_ble_config_t *) config;
+    protocomm_ble_config_t *ble_config = (protocomm_ble_config_t *)config;
 
     ble_config->ble_bonding = 1;
 
@@ -52,20 +52,18 @@ static esp_err_t ota_start(protocomm_t *pc, void *config)
 
 esp_err_t esp_ble_ota_scheme_ble_set_service_uuid(uint8_t *uuid128)
 {
-    if (!uuid128) {
+    if (!uuid128)
         return ESP_ERR_INVALID_ARG;
-    }
     custom_service_uuid = uuid128;
     return ESP_OK;
 }
 
 esp_err_t esp_ble_ota_scheme_ble_set_mfg_data(uint8_t *mfg_data, ssize_t mfg_data_len)
 {
-    if (!mfg_data || !mfg_data_len) {
+    if (!mfg_data || !mfg_data_len)
         return ESP_ERR_INVALID_ARG;
-    }
 
-    custom_manufacturer_data = (uint8_t *) malloc(mfg_data_len);
+    custom_manufacturer_data = (uint8_t *)malloc(mfg_data_len);
     if (custom_manufacturer_data == NULL) {
         ESP_LOGE(TAG, "Error allocating memory for mfg_data");
         return ESP_ERR_NO_MEM;
@@ -103,10 +101,9 @@ static void delete_config(void *config)
         return;
     }
 
-    protocomm_ble_config_t *ble_config = (protocomm_ble_config_t *) config;
-    for (unsigned int i = 0; i < ble_config->nu_lookup_count; i++) {
+    protocomm_ble_config_t *ble_config = (protocomm_ble_config_t *)config;
+    for (unsigned int i = 0; i < ble_config->nu_lookup_count; i++)
         free((void *)ble_config->nu_lookup[i].name);
-    }
     free(ble_config->nu_lookup);
     free(ble_config);
 }
@@ -123,20 +120,23 @@ static esp_err_t set_config_service(void *config, const char *service_name, cons
         return ESP_ERR_INVALID_ARG;
     }
 
-    protocomm_ble_config_t *ble_config = (protocomm_ble_config_t *) config;
-    strlcpy(ble_config->device_name,  service_name, sizeof(ble_config->device_name));
+    protocomm_ble_config_t *ble_config = (protocomm_ble_config_t *)config;
+    strlcpy(ble_config->device_name, service_name, sizeof(ble_config->device_name));
 
     /* If a custom service UUID has been provided, override the default one */
-    if (custom_service_uuid) {
+    if (custom_service_uuid)
         memcpy(ble_config->service_uuid, custom_service_uuid, sizeof(ble_config->service_uuid));
-    }
     /* Set manufacturer data if it is provided by app */
     if (custom_manufacturer_data) {
         size_t mfg_data_len = custom_manufacturer_data_len;
         /* Manufacturer Data Length + 2 Byte header + BLE Device name + 2 Byte
          * header <= 31 Bytes */
         if (mfg_data_len > (MAX_BLE_MANUFACTURER_DATA_LEN - sizeof(ble_config->device_name) - 2)) {
-            ESP_LOGE(TAG, "Manufacturer data length is more than the max allowed size; expect truncated mfg_data ");
+            ESP_LOGE(
+                TAG, "Manufacturer data length is more than the max "
+                     "allowed size; expect "
+                     "truncated mfg_data "
+            );
             /* XXX Does it even make any sense to set truncated mfg_data ? The
              * only reason to not return failure from here is ota
              * should continue as it is with error prints for mfg_data length */
@@ -165,7 +165,7 @@ static esp_err_t set_config_endpoint(void *config, const char *endpoint_name, ui
         return ESP_ERR_INVALID_ARG;
     }
 
-    protocomm_ble_config_t *ble_config = (protocomm_ble_config_t *) config;
+    protocomm_ble_config_t *ble_config = (protocomm_ble_config_t *)config;
 
     char *copy_ep_name = strdup(endpoint_name);
     if (!copy_ep_name) {
@@ -173,8 +173,9 @@ static esp_err_t set_config_endpoint(void *config, const char *endpoint_name, ui
         return ESP_ERR_NO_MEM;
     }
 
-    protocomm_ble_name_uuid_t *lookup_table = (
-                                                  realloc(ble_config->nu_lookup, (ble_config->nu_lookup_count + 1) * sizeof(protocomm_ble_name_uuid_t)));
+    protocomm_ble_name_uuid_t *lookup_table = (realloc(
+        ble_config->nu_lookup, (ble_config->nu_lookup_count + 1) * sizeof(protocomm_ble_name_uuid_t)
+    ));
     if (!lookup_table) {
         ESP_LOGE(TAG, "Error allocating memory for EP-UUID lookup table");
         return ESP_ERR_NO_MEM;
@@ -188,28 +189,30 @@ static esp_err_t set_config_endpoint(void *config, const char *endpoint_name, ui
 }
 
 /* Used when both BT and BLE are not needed by application */
-void esp_ble_ota_scheme_ble_event_cb_free_btdm(void *user_data, esp_ble_ota_cb_event_t event, void *event_data)
+void esp_ble_ota_scheme_ble_event_cb_free_btdm(
+    void *user_data,
+    esp_ble_ota_cb_event_t event,
+    void *event_data
+)
 {
     esp_err_t err;
     switch (event) {
     case OTA_INIT:
         /* Release BT memory, as we need only BLE */
         err = esp_bt_mem_release(ESP_BT_MODE_CLASSIC_BT);
-        if (err != ESP_OK) {
+        if (err != ESP_OK)
             ESP_LOGE(TAG, "bt_mem_release of classic BT failed %d", err);
-        } else {
+        else
             ESP_LOGI(TAG, "BT memory released");
-        }
         break;
 
     case OTA_DEINIT:
         /* Release memory used by BLE and Bluedroid host stack */
         err = esp_bt_mem_release(ESP_BT_MODE_BTDM);
-        if (err != ESP_OK) {
+        if (err != ESP_OK)
             ESP_LOGE(TAG, "bt_mem_release of BTDM failed %d", err);
-        } else {
+        else
             ESP_LOGI(TAG, "BTDM memory released");
-        }
         break;
 
     default:
@@ -218,18 +221,21 @@ void esp_ble_ota_scheme_ble_event_cb_free_btdm(void *user_data, esp_ble_ota_cb_e
 }
 
 /* Used when BT is not needed by application */
-void esp_ble_ota_scheme_ble_event_cb_free_bt(void *user_data, esp_ble_ota_cb_event_t event, void *event_data)
+void esp_ble_ota_scheme_ble_event_cb_free_bt(
+    void *user_data,
+    esp_ble_ota_cb_event_t event,
+    void *event_data
+)
 {
     esp_err_t err;
     switch (event) {
     case OTA_INIT:
         /* Release BT memory, as we need only BLE */
         err = esp_bt_mem_release(ESP_BT_MODE_CLASSIC_BT);
-        if (err != ESP_OK) {
+        if (err != ESP_OK)
             ESP_LOGE(TAG, "bt_mem_release of classic BT failed %d", err);
-        } else {
+        else
             ESP_LOGI(TAG, "BT memory released");
-        }
         break;
 
     default:
@@ -238,18 +244,21 @@ void esp_ble_ota_scheme_ble_event_cb_free_bt(void *user_data, esp_ble_ota_cb_eve
 }
 
 /* Used when BLE is not needed by application */
-void esp_ble_ota_scheme_ble_event_cb_free_ble(void *user_data, esp_ble_ota_cb_event_t event, void *event_data)
+void esp_ble_ota_scheme_ble_event_cb_free_ble(
+    void *user_data,
+    esp_ble_ota_cb_event_t event,
+    void *event_data
+)
 {
     esp_err_t err;
     switch (event) {
     case OTA_DEINIT:
         /* Release memory used by BLE stack */
         err = esp_bt_mem_release(ESP_BT_MODE_BLE);
-        if (err != ESP_OK) {
+        if (err != ESP_OK)
             ESP_LOGE(TAG, "bt_mem_release of BLE failed %d", err);
-        } else {
+        else
             ESP_LOGI(TAG, "BLE memory released");
-        }
         break;
 
     default:
@@ -258,10 +267,10 @@ void esp_ble_ota_scheme_ble_event_cb_free_ble(void *user_data, esp_ble_ota_cb_ev
 }
 
 const esp_ble_ota_scheme_t esp_ble_ota_scheme_ble = {
-    .ota_start           = ota_start,
-    .ota_stop            = protocomm_ble_stop,
-    .new_config          = new_config,
-    .delete_config       = delete_config,
-    .set_config_service  = set_config_service,
+    .ota_start = ota_start,
+    .ota_stop = protocomm_ble_stop,
+    .new_config = new_config,
+    .delete_config = delete_config,
+    .set_config_service = set_config_service,
     .set_config_endpoint = set_config_endpoint,
 };

@@ -46,9 +46,15 @@ typedef struct ota_ctrl_handlers {
  * This is to be registered as the `recv-fw`, 'ota-bar', 'ota-command',
  * 'ota-customer' endpoint handler (protocomm `protocomm_req_handler_t`)
  * using `protocomm_add_endpoint()`
-*/
-esp_err_t ota_handler(uint32_t session_id, const uint8_t *inbuf, ssize_t inlen,
-                      uint8_t **outbuf, ssize_t *outlen, void *priv_data);
+ */
+esp_err_t ota_handler(
+    uint32_t session_id,
+    const uint8_t *inbuf,
+    ssize_t inlen,
+    uint8_t **outbuf,
+    ssize_t *outlen,
+    void *priv_data
+);
 
 #ifdef __cplusplus
 }

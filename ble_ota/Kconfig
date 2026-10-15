@@ -22,4 +22,15 @@ menu "OTA Manager"
             help
                 Used to enable transferring pre encrypted file via OTA
     endchoice
+
+    config BLE_OTA_EXTERNAL_HOST
+        bool "Use an application-owned NimBLE host"
+        depends on BT_NIMBLE_ENABLED && !OTA_WITH_PROTOCOMM
+        default n
+        help
+            The component no longer initializes NimBLE, sets the device name, advertises or
+            handles GAP events. The application registers the OTA service with
+            esp_ble_ota_gatt_register() and forwards connect, disconnect and subscribe events
+            through esp_ble_ota_on_connect(), esp_ble_ota_on_disconnect() and
+            esp_ble_ota_on_subscribe(). Requires CONFIG_BT_NIMBLE_DYNAMIC_SERVICE.
 endmenu

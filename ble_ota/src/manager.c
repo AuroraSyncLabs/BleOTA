@@ -13,8 +13,8 @@
 
 #include <cJSON.h>
 
-#include <esp_log.h>
 #include <esp_err.h>
+#include <esp_log.h>
 #include <esp_timer.h>
 
 #include <protocomm.h>
@@ -26,13 +26,13 @@
 
 #include "ble_ota.h"
 
-#define ESP_BLE_OTA_MGR_VERSION      "v1.1"
-#define ESP_BLE_OTA_STORAGE_BIT       BIT0
-#define ESP_BLE_OTA_SETTING_BIT       BIT1
-#define MAX_SCAN_RESULTS           CONFIG_ESP_BLE_OTA_SCAN_MAX_ENTRIES
+#define ESP_BLE_OTA_MGR_VERSION "v1.1"
+#define ESP_BLE_OTA_STORAGE_BIT BIT0
+#define ESP_BLE_OTA_SETTING_BIT BIT1
+#define MAX_SCAN_RESULTS CONFIG_ESP_BLE_OTA_SCAN_MAX_ENTRIES
 
-#define ACQUIRE_LOCK(mux)     assert(xSemaphoreTake(mux, portMAX_DELAY) == pdTRUE)
-#define RELEASE_LOCK(mux)     assert(xSemaphoreGive(mux) == pdTRUE)
+#define ACQUIRE_LOCK(mux) assert(xSemaphoreTake(mux, portMAX_DELAY) == pdTRUE)
+#define RELEASE_LOCK(mux) assert(xSemaphoreGive(mux) == pdTRUE)
 
 static const char *TAG = "esp_ble_ota";
 static uint8_t *fw_buf = NULL;
@@ -116,11 +116,10 @@ static SemaphoreHandle_t prov_ctx_lock = NULL;
 /* Pointer to ota context data */
 static struct esp_ble_ota_ctx *prov_ctx;
 
-static cJSON *
-esp_ble_ota_get_info_json(void)
+static cJSON *esp_ble_ota_get_info_json(void)
 {
-    cJSON *full_info_json = prov_ctx->app_info_json ?
-                            cJSON_Duplicate(prov_ctx->app_info_json, 1) : cJSON_CreateObject();
+    cJSON *full_info_json = prov_ctx->app_info_json ? cJSON_Duplicate(prov_ctx->app_info_json, 1)
+                                                    : cJSON_CreateObject();
     cJSON *prov_info_json = cJSON_CreateObject();
     cJSON *prov_capabilities = cJSON_CreateArray();
 
@@ -134,26 +133,28 @@ esp_ble_ota_get_info_json(void)
     /* Capabilities field */
     cJSON_AddItemToObject(prov_info_json, "cap", prov_capabilities);
 
-    /* If Security / Proof of Possession is not used, indicate in capabilities */
-    if (prov_ctx->mgr_info.capabilities.no_sec) {
+    /* If Security / Proof of Possession is not used, indicate in capabilities
+     */
+    if (prov_ctx->mgr_info.capabilities.no_sec)
         cJSON_AddItemToArray(prov_capabilities, cJSON_CreateString("no_sec"));
-    } else if (prov_ctx->mgr_info.capabilities.no_pop) {
+    else if (prov_ctx->mgr_info.capabilities.no_pop)
         cJSON_AddItemToArray(prov_capabilities, cJSON_CreateString("no_pop"));
-    }
 
     return full_info_json;
 }
 
 /* Declare the internal event handler */
-static void
-esp_ble_ota_event_handler_internal(void *arg, esp_event_base_t event_base,
-                                   int32_t event_id, void *event_data)
+static void esp_ble_ota_event_handler_internal(
+    void *arg,
+    esp_event_base_t event_base,
+    int32_t event_id,
+    void *event_data
+)
 {
     ESP_LOGD(TAG, "%s invoked", __func__);
 }
 
-static esp_err_t
-esp_ble_ota_start_service(const char *service_name, const char *service_key)
+static esp_err_t esp_ble_ota_start_service(const char *service_name, const char *service_key)
 {
     const esp_ble_ota_scheme_t *scheme = &prov_ctx->mgr_config.scheme;
     esp_err_t ret;
@@ -196,24 +197,25 @@ esp_ble_ota_start_service(const char *service_name, const char *service_key)
     /* Set protocomm security type for endpoint */
     if (prov_ctx->security == 0) {
 #ifdef CONFIG_ESP_PROTOCOMM_SUPPORT_SECURITY_VERSION_0
-        ret = protocomm_set_security(prov_ctx->pc, "prov-session",
-                                     &protocomm_security0, NULL);
+        ret = protocomm_set_security(prov_ctx->pc, "prov-session", &protocomm_security0, NULL);
 #else
         // Enable SECURITY_VERSION_0 in Protocomm configuration menu
         return ESP_ERR_NOT_SUPPORTED;
 #endif
     } else if (prov_ctx->security == 1) {
 #ifdef CONFIG_ESP_PROTOCOMM_SUPPORT_SECURITY_VERSION_1
-        ret = protocomm_set_security(prov_ctx->pc, "prov-session",
-                                     &protocomm_security1, prov_ctx->protocomm_sec_params);
+        ret = protocomm_set_security(
+            prov_ctx->pc, "prov-session", &protocomm_security1, prov_ctx->protocomm_sec_params
+        );
 #else
         // Enable SECURITY_VERSION_1 in Protocomm configuration menu
         return ESP_ERR_NOT_SUPPORTED;
 #endif
     } else if (prov_ctx->security == 2) {
 #ifdef CONFIG_ESP_PROTOCOMM_SUPPORT_SECURITY_VERSION_2
-        ret = protocomm_set_security(prov_ctx->pc, "prov-session",
-                                     &protocomm_security2, prov_ctx->protocomm_sec_params);
+        ret = protocomm_set_security(
+            prov_ctx->pc, "prov-session", &protocomm_security2, prov_ctx->protocomm_sec_params
+        );
 #else
         // Enable SECURITY_VERSION_2 in Protocomm configuration menu
         return ESP_ERR_NOT_SUPPORTED;
@@ -239,9 +241,7 @@ esp_ble_ota_start_service(const char *service_name, const char *service_key)
     }
 
     // Add endpoint for OTA
-    ret = protocomm_add_endpoint(prov_ctx->pc, "recv-fw",
-                                 ota_handler,
-                                 prov_ctx->ota_handlers);
+    ret = protocomm_add_endpoint(prov_ctx->pc, "recv-fw", ota_handler, prov_ctx->ota_handlers);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to set OTA endpoint");
         free(prov_ctx->ota_handlers);
@@ -250,9 +250,7 @@ esp_ble_ota_start_service(const char *service_name, const char *service_key)
         return ret;
     }
 
-    ret = protocomm_add_endpoint(prov_ctx->pc, "ota-bar",
-                                 ota_handler,
-                                 prov_ctx->ota_handlers);
+    ret = protocomm_add_endpoint(prov_ctx->pc, "ota-bar", ota_handler, prov_ctx->ota_handlers);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to set OTA endpoint");
         free(prov_ctx->ota_handlers);
@@ -261,9 +259,7 @@ esp_ble_ota_start_service(const char *service_name, const char *service_key)
         return ret;
     }
 
-    ret = protocomm_add_endpoint(prov_ctx->pc, "ota-command",
-                                 ota_handler,
-                                 prov_ctx->ota_handlers);
+    ret = protocomm_add_endpoint(prov_ctx->pc, "ota-command", ota_handler, prov_ctx->ota_handlers);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to set OTA endpoint");
         free(prov_ctx->ota_handlers);
@@ -272,9 +268,7 @@ esp_ble_ota_start_service(const char *service_name, const char *service_key)
         return ret;
     }
 
-    ret = protocomm_add_endpoint(prov_ctx->pc, "ota-customer",
-                                 ota_handler,
-                                 prov_ctx->ota_handlers);
+    ret = protocomm_add_endpoint(prov_ctx->pc, "ota-customer", ota_handler, prov_ctx->ota_handlers);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to set OTA endpoint");
         free(prov_ctx->ota_handlers);
@@ -283,13 +277,11 @@ esp_ble_ota_start_service(const char *service_name, const char *service_key)
         return ret;
     }
 
-    ESP_LOGI(TAG, "OTA started with service name : %s ",
-             service_name ? service_name : "<NULL>");
+    ESP_LOGI(TAG, "OTA started with service name : %s ", service_name ? service_name : "<NULL>");
     return ESP_OK;
 }
 
-esp_err_t
-esp_ble_ota_endpoint_create(const char *ep_name)
+esp_err_t esp_ble_ota_endpoint_create(const char *ep_name)
 {
     if (!prov_ctx_lock) {
         ESP_LOGE(TAG, "manager not initialized");
@@ -299,23 +291,24 @@ esp_ble_ota_endpoint_create(const char *ep_name)
     esp_err_t err = ESP_FAIL;
 
     ACQUIRE_LOCK(prov_ctx_lock);
-    if (prov_ctx &&
-            prov_ctx->prov_state == ESP_BLE_OTA_STATE_IDLE) {
+    if (prov_ctx && prov_ctx->prov_state == ESP_BLE_OTA_STATE_IDLE) {
         err = prov_ctx->mgr_config.scheme.set_config_endpoint(
-                  prov_ctx->prov_scheme_config, ep_name,
-                  prov_ctx->endpoint_uuid_used + 1);
+            prov_ctx->prov_scheme_config, ep_name, prov_ctx->endpoint_uuid_used + 1
+        );
     }
-    if (err != ESP_OK) {
+    if (err != ESP_OK)
         ESP_LOGE(TAG, "Failed to create additional endpoint");
-    } else {
+    else
         prov_ctx->endpoint_uuid_used++;
-    }
     RELEASE_LOCK(prov_ctx_lock);
     return err;
 }
 
-esp_err_t
-esp_ble_ota_endpoint_register(const char *ep_name, protocomm_req_handler_t handler, void *user_ctx)
+esp_err_t esp_ble_ota_endpoint_register(
+    const char *ep_name,
+    protocomm_req_handler_t handler,
+    void *user_ctx
+)
 {
     if (!prov_ctx_lock) {
         ESP_LOGE(TAG, "manager not initialized");
@@ -325,21 +318,18 @@ esp_ble_ota_endpoint_register(const char *ep_name, protocomm_req_handler_t handl
     esp_err_t err = ESP_FAIL;
 
     ACQUIRE_LOCK(prov_ctx_lock);
-    if (prov_ctx &&
-            prov_ctx->prov_state > ESP_BLE_OTA_STATE_STARTING &&
-            prov_ctx->prov_state < ESP_BLE_OTA_STATE_STOPPING) {
+    if (prov_ctx && prov_ctx->prov_state > ESP_BLE_OTA_STATE_STARTING &&
+        prov_ctx->prov_state < ESP_BLE_OTA_STATE_STOPPING) {
         err = protocomm_add_endpoint(prov_ctx->pc, ep_name, handler, user_ctx);
     }
     RELEASE_LOCK(prov_ctx_lock);
 
-    if (err != ESP_OK) {
+    if (err != ESP_OK)
         ESP_LOGE(TAG, "Failed to register handler for endpoint err = %d", err);
-    }
     return err;
 }
 
-void
-esp_ble_ota_endpoint_unregister(const char *ep_name)
+void esp_ble_ota_endpoint_unregister(const char *ep_name)
 {
     if (!prov_ctx_lock) {
         ESP_LOGE(TAG, "manager not initialized");
@@ -347,18 +337,16 @@ esp_ble_ota_endpoint_unregister(const char *ep_name)
     }
 
     ACQUIRE_LOCK(prov_ctx_lock);
-    if (prov_ctx &&
-            prov_ctx->prov_state > ESP_BLE_OTA_STATE_STARTING &&
-            prov_ctx->prov_state < ESP_BLE_OTA_STATE_STOPPING) {
+    if (prov_ctx && prov_ctx->prov_state > ESP_BLE_OTA_STATE_STARTING &&
+        prov_ctx->prov_state < ESP_BLE_OTA_STATE_STOPPING) {
         protocomm_remove_endpoint(prov_ctx->pc, ep_name);
     }
     RELEASE_LOCK(prov_ctx_lock);
 }
 
-static void
-ota_stop_task(void *arg)
+static void ota_stop_task(void *arg)
 {
-    bool is_this_a_task = (bool) arg;
+    bool is_this_a_task = (bool)arg;
 
     esp_ble_ota_cb_func_t app_cb = prov_ctx->mgr_config.app_event_handler.event_cb;
     void *app_data = prov_ctx->mgr_config.app_event_handler.user_data;
@@ -392,29 +380,24 @@ ota_stop_task(void *arg)
         RELEASE_LOCK(prov_ctx_lock);
 
         ESP_LOGD(TAG, "execute_event_cb : %d", OTA_END);
-        if (scheme_cb) {
+        if (scheme_cb)
             scheme_cb(scheme_data, OTA_END, NULL);
-        }
-        if (app_cb) {
+        if (app_cb)
             app_cb(app_data, OTA_END, NULL);
-        }
-        if (esp_event_post(ESP_BLE_OTA_EVENT, OTA_END, NULL, 0, portMAX_DELAY) != ESP_OK) {
+        if (esp_event_post(ESP_BLE_OTA_EVENT, OTA_END, NULL, 0, portMAX_DELAY) != ESP_OK)
             ESP_LOGE(TAG, "Failed to post event ESP_BLE_OTA_END");
-        }
 
         vTaskDelete(NULL);
     }
 }
 
-static bool
-esp_ble_ota_stop_service(bool blocking)
+static bool esp_ble_ota_stop_service(bool blocking)
 {
     if (blocking) {
         /* Wait for any ongoing calls to esp_ble_ota_start_service() or
          * esp_ble_ota_stop_service() from another thread to finish */
-        while (prov_ctx && (
-                    prov_ctx->prov_state == ESP_BLE_OTA_STATE_STARTING ||
-                    prov_ctx->prov_state == ESP_BLE_OTA_STATE_STOPPING)) {
+        while (prov_ctx && (prov_ctx->prov_state == ESP_BLE_OTA_STATE_STARTING ||
+                            prov_ctx->prov_state == ESP_BLE_OTA_STATE_STOPPING)) {
             RELEASE_LOCK(prov_ctx_lock);
             vTaskDelay(100 / portTICK_PERIOD_MS);
             ACQUIRE_LOCK(prov_ctx_lock);
@@ -422,8 +405,7 @@ esp_ble_ota_stop_service(bool blocking)
     } else {
         /* Wait for any ongoing call to esp_ble_ota_start_service()
          * from another thread to finish */
-        while (prov_ctx &&
-                prov_ctx->prov_state == ESP_BLE_OTA_STATE_STARTING) {
+        while (prov_ctx && prov_ctx->prov_state == ESP_BLE_OTA_STATE_STARTING) {
             RELEASE_LOCK(prov_ctx_lock);
             vTaskDelay(100 / portTICK_PERIOD_MS);
             ACQUIRE_LOCK(prov_ctx_lock);
@@ -455,15 +437,17 @@ esp_ble_ota_stop_service(bool blocking)
         if (prov_ctx->security == 1) {
             // In case of security 1 we keep an internal copy of "pop".
             // Hence free it at this point
-            uint8_t *pop = (uint8_t *)((protocomm_security1_params_t *) prov_ctx->protocomm_sec_params)->data;
+            uint8_t *pop =
+                (uint8_t *)((protocomm_security1_params_t *)prov_ctx->protocomm_sec_params)->data;
             free(pop);
         }
         prov_ctx->protocomm_sec_params = NULL;
     }
 
     /* Remove event handler */
-    esp_event_handler_unregister(ESP_BLE_OTA_EVENT, ESP_EVENT_ANY_ID,
-                                 esp_ble_ota_event_handler_internal);
+    esp_event_handler_unregister(
+        ESP_BLE_OTA_EVENT, ESP_EVENT_ANY_ID, esp_ble_ota_event_handler_internal
+    );
 
     if (blocking) {
         RELEASE_LOCK(prov_ctx_lock);
@@ -471,7 +455,8 @@ esp_ble_ota_stop_service(bool blocking)
         ACQUIRE_LOCK(prov_ctx_lock);
         prov_ctx->prov_state = ESP_BLE_OTA_STATE_IDLE;
     } else {
-        if (xTaskCreate(ota_stop_task, "ota_stop_task", 4000, (void *)1, tskIDLE_PRIORITY, NULL) != pdPASS) {
+        if (xTaskCreate(ota_stop_task, "ota_stop_task", 4000, (void *)1, tskIDLE_PRIORITY, NULL) !=
+            pdPASS) {
             ESP_LOGE(TAG, "Failed to create ota_stop_task!");
             abort();
         }
@@ -481,8 +466,7 @@ esp_ble_ota_stop_service(bool blocking)
 }
 
 /* Call this if ota is completed before the timeout occurs */
-esp_err_t
-esp_ble_ota_done(void)
+esp_err_t esp_ble_ota_done(void)
 {
     if (!prov_ctx_lock) {
         ESP_LOGE(TAG, "manager not initialized");
@@ -493,8 +477,7 @@ esp_ble_ota_done(void)
     return ESP_OK;
 }
 
-esp_err_t
-esp_ble_ota_init(esp_ble_ota_config_t config)
+esp_err_t esp_ble_ota_init(esp_ble_ota_config_t config)
 {
     if (!prov_ctx_lock) {
         prov_ctx_lock = xSemaphoreCreateMutex();
@@ -504,21 +487,14 @@ esp_ble_ota_init(esp_ble_ota_config_t config)
         }
     }
 
-    void *fn_ptrs[] = {
-        config.scheme.ota_stop,
-        config.scheme.ota_start,
-        config.scheme.new_config,
-        config.scheme.delete_config,
-        config.scheme.set_config_service,
-        config.scheme.set_config_endpoint
-    };
+    void *fn_ptrs[] = {config.scheme.ota_stop,           config.scheme.ota_start,
+                       config.scheme.new_config,         config.scheme.delete_config,
+                       config.scheme.set_config_service, config.scheme.set_config_endpoint};
 
     /* All function pointers in the scheme structure must be non-null */
-    for (size_t i = 0; i < sizeof(fn_ptrs) / sizeof(fn_ptrs[0]); i++) {
-        if (!fn_ptrs[i]) {
+    for (size_t i = 0; i < sizeof(fn_ptrs) / sizeof(fn_ptrs[0]); i++)
+        if (!fn_ptrs[i])
             return ESP_ERR_INVALID_ARG;
-        }
-    }
 
     ACQUIRE_LOCK(prov_ctx_lock);
     if (prov_ctx) {
@@ -528,7 +504,7 @@ esp_ble_ota_init(esp_ble_ota_config_t config)
     }
 
     /* Allocate memory for ota app data */
-    prov_ctx = (struct esp_ble_ota_ctx *) calloc(1, sizeof(struct esp_ble_ota_ctx));
+    prov_ctx = (struct esp_ble_ota_ctx *)calloc(1, sizeof(struct esp_ble_ota_ctx));
     if (!prov_ctx) {
         ESP_LOGE(TAG, "Error allocating memory for singleton instance");
         RELEASE_LOCK(prov_ctx_lock);
@@ -596,17 +572,15 @@ esp_ble_ota_init(esp_ble_ota_config_t config)
 
 exit:
     if (ret != ESP_OK) {
-        if (prov_ctx->prov_scheme_config) {
+        if (prov_ctx->prov_scheme_config)
             config.scheme.delete_config(prov_ctx->prov_scheme_config);
-        }
         free(prov_ctx);
     }
     RELEASE_LOCK(prov_ctx_lock);
     return ret;
 }
 
-void
-esp_ble_ota_wait(void)
+void esp_ble_ota_wait(void)
 {
     if (!prov_ctx_lock) {
         ESP_LOGE(TAG, "manager not initialized");
@@ -615,8 +589,7 @@ esp_ble_ota_wait(void)
 
     while (1) {
         ACQUIRE_LOCK(prov_ctx_lock);
-        if (prov_ctx &&
-                prov_ctx->prov_state != ESP_BLE_OTA_STATE_IDLE) {
+        if (prov_ctx && prov_ctx->prov_state != ESP_BLE_OTA_STATE_IDLE) {
             RELEASE_LOCK(prov_ctx_lock);
             vTaskDelay(1000 / portTICK_PERIOD_MS);
             continue;
@@ -626,8 +599,7 @@ esp_ble_ota_wait(void)
     RELEASE_LOCK(prov_ctx_lock);
 }
 
-void
-esp_ble_ota_deinit(void)
+void esp_ble_ota_deinit(void)
 {
     if (!prov_ctx_lock) {
         ESP_LOGE(TAG, "manager not initialized");
@@ -646,13 +618,11 @@ esp_ble_ota_deinit(void)
         return;
     }
 
-    if (prov_ctx->app_info_json) {
+    if (prov_ctx->app_info_json)
         cJSON_Delete(prov_ctx->app_info_json);
-    }
 
-    if (prov_ctx->prov_scheme_config) {
+    if (prov_ctx->prov_scheme_config)
         prov_ctx->mgr_config.scheme.delete_config(prov_ctx->prov_scheme_config);
-    }
 
     esp_ble_ota_cb_func_t app_cb = prov_ctx->mgr_config.app_event_handler.event_cb;
     void *app_data = prov_ctx->mgr_config.app_event_handler.user_data;
@@ -669,37 +639,34 @@ esp_ble_ota_deinit(void)
      * then ESP_BLE_OTA_END event also needs to be emitted before deinit */
     if (service_was_running) {
         ESP_LOGD(TAG, "execute_event_cb : %d", OTA_END);
-        if (scheme_cb) {
+        if (scheme_cb)
             scheme_cb(scheme_data, OTA_END, NULL);
-        }
-        if (app_cb) {
+        if (app_cb)
             app_cb(app_data, OTA_END, NULL);
-        }
-        if (esp_event_post(ESP_BLE_OTA_EVENT, OTA_END, NULL, 0, portMAX_DELAY) != ESP_OK) {
+        if (esp_event_post(ESP_BLE_OTA_EVENT, OTA_END, NULL, 0, portMAX_DELAY) != ESP_OK)
             ESP_LOGE(TAG, "Failed to post event ESP_BLE_OTA_END");
-        }
     }
 
     ESP_LOGD(TAG, "execute_event_cb : %d", OTA_DEINIT);
 
     /* Execute deinit event callbacks */
-    if (scheme_cb) {
+    if (scheme_cb)
         scheme_cb(scheme_data, OTA_DEINIT, NULL);
-    }
-    if (app_cb) {
+    if (app_cb)
         app_cb(app_data, OTA_DEINIT, NULL);
-    }
-    if (esp_event_post(ESP_BLE_OTA_EVENT, OTA_DEINIT, NULL, 0, portMAX_DELAY) != ESP_OK) {
+    if (esp_event_post(ESP_BLE_OTA_EVENT, OTA_DEINIT, NULL, 0, portMAX_DELAY) != ESP_OK)
         ESP_LOGE(TAG, "Failed to post event ESP_BLE_OTA_DEINIT");
-    }
 
     vSemaphoreDelete(prov_ctx_lock);
     prov_ctx_lock = NULL;
 }
 
-esp_err_t
-esp_ble_ota_start(esp_ble_ota_security_t security, const void *esp_ble_ota_sec_params,
-                  const char *service_name, const char *service_key)
+esp_err_t esp_ble_ota_start(
+    esp_ble_ota_security_t security,
+    const void *esp_ble_ota_sec_params,
+    const char *service_name,
+    const char *service_key
+)
 {
     if (!prov_ctx_lock) {
         ESP_LOGE(TAG, "manager not initialized");
@@ -723,18 +690,16 @@ esp_ble_ota_start(esp_ble_ota_security_t security, const void *esp_ble_ota_sec_p
     prov_ctx->prov_state = ESP_BLE_OTA_STATE_STARTING;
 
     fw_buf = (uint8_t *)malloc(4096 * sizeof(uint8_t));
-    if (fw_buf == NULL) {
+    if (fw_buf == NULL)
         ESP_LOGE(TAG, "%s -  malloc fail", __func__);
-    } else {
+    else
         memset(fw_buf, 0x0, 4096);
-    }
     fw_buf_offset = 0;
 
 #ifdef CONFIG_ESP_PROTOCOMM_SUPPORT_SECURITY_VERSION_0
     /* Initialize app data */
-    if (security == ESP_BLE_OTA_SECURITY_0) {
+    if (security == ESP_BLE_OTA_SECURITY_0)
         prov_ctx->mgr_info.capabilities.no_sec = true;
-    }
 #endif
 #ifdef CONFIG_ESP_PROTOCOMM_SUPPORT_SECURITY_VERSION_1
     if (security == ESP_BLE_OTA_SECURITY_1) {
@@ -749,7 +714,7 @@ esp_ble_ota_start(esp_ble_ota_security_t security, const void *esp_ble_ota_sec_p
             }
             sec1_params.data = (const uint8_t *)pop;
             sec1_params.len = strlen(pop);
-            prov_ctx->protocomm_sec_params = (const void *) &sec1_params;
+            prov_ctx->protocomm_sec_params = (const void *)&sec1_params;
         } else {
             prov_ctx->mgr_info.capabilities.no_pop = true;
         }
@@ -757,9 +722,8 @@ esp_ble_ota_start(esp_ble_ota_security_t security, const void *esp_ble_ota_sec_p
 #endif
 #ifdef CONFIG_ESP_PROTOCOMM_SUPPORT_SECURITY_VERSION_2
     if (security == ESP_BLE_OTA_SECURITY_2) {
-        if (esp_ble_ota_sec_params) {
+        if (esp_ble_ota_sec_params)
             prov_ctx->protocomm_sec_params = esp_ble_ota_sec_params;
-        }
     }
 #endif
     prov_ctx->security = security;
@@ -768,14 +732,12 @@ esp_ble_ota_start(esp_ble_ota_security_t security, const void *esp_ble_ota_sec_p
 
     /* Start service */
     ret = esp_ble_ota_start_service(service_name, service_key);
-    if (ret != ESP_OK) {
+    if (ret != ESP_OK)
         esp_timer_delete(prov_ctx->autostop_timer);
-    }
     return ret;
 }
 
-void
-esp_ble_ota_stop(void)
+void esp_ble_ota_stop(void)
 {
     if (!prov_ctx_lock) {
         ESP_LOGE(TAG, "manager not initialized");

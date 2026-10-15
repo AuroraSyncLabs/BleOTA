@@ -1,12 +1,13 @@
+#include "ble_ota.h"
+#include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
-#include "esp_log.h"
 #include "nvs_flash.h"
-#include "ble_ota.h"
 
 static const char *TAG = "ble_ota_test";
 
-/* Required by the component: guards indication sends (declared extern in src/). */
+/* Required by the component: guards indication sends (declared extern in src/).
+ */
 SemaphoreHandle_t notify_sem;
 
 static void recv_fw_cb(uint8_t *buf, uint32_t length)

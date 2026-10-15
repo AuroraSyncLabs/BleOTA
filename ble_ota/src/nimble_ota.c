@@ -2,21 +2,21 @@
  * SPDX-FileCopyrightText: 2019-2026 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
-*/
+ */
 
 #include "esp_log.h"
 #include "nvs_flash.h"
 /* BLE */
+#include "ble_ota.h"
+#include "console/console.h"
+#include "freertos/semphr.h"
+#include "host/ble_hs.h"
+#include "host/ble_uuid.h"
+#include "host/util/util.h"
 #include "nimble/nimble_port.h"
 #include "nimble/nimble_port_freertos.h"
-#include "host/ble_hs.h"
-#include "host/util/util.h"
-#include "console/console.h"
 #include "services/gap/ble_svc_gap.h"
 #include "services/gatt/ble_svc_gatt.h"
-#include "host/ble_uuid.h"
-#include "ble_ota.h"
-#include "freertos/semphr.h"
 #include <stdbool.h>
 #include <stdlib.h>
 #if ESP_IDF_VERSION < ESP_IDF_VERSION_VAL(5, 0, 0)
@@ -27,8 +27,7 @@
  * It is not present in NimBLE 1.3, but is present in NimBLE 1.4.
  * This function is used to get the length of an os_mbuf.
  */
-uint16_t
-os_mbuf_len(const struct os_mbuf *om)
+uint16_t os_mbuf_len(const struct os_mbuf *om)
 {
     uint16_t len;
 
@@ -42,35 +41,34 @@ os_mbuf_len(const struct os_mbuf *om)
 }
 #endif
 
-/** Last-packet payload trailer after firmware bytes (same on plain and pre-encrypted OTA). */
-#define SECTOR_END_ID                       2
+/** Last-packet payload trailer after firmware bytes (same on plain and
+ * pre-encrypted OTA). */
+#define SECTOR_END_ID 2
 
 #ifdef CONFIG_PRE_ENC_OTA
-#define ENC_HEADER                          512
+#define ENC_HEADER 512
 esp_decrypt_handle_t decrypt_handle_cmp;
 #endif
 
-#define BUF_LENGTH                          4098
-#define OTA_IDX_NB                          4
-#define CMD_ACK_LENGTH                      20
+#define BUF_LENGTH 4098
+#define OTA_IDX_NB 4
+#define CMD_ACK_LENGTH 20
 
-#define character_declaration_uuid          BLE_ATT_UUID_CHARACTERISTIC
-#define character_client_config_uuid        BLE_ATT_UUID_CHARACTERISTIC
+#define character_declaration_uuid BLE_ATT_UUID_CHARACTERISTIC
+#define character_client_config_uuid BLE_ATT_UUID_CHARACTERISTIC
 
-#define GATT_SVR_SVC_ALERT_UUID             0x1811
-#define BLE_OTA_SERVICE_UUID                0x8018
+#define GATT_SVR_SVC_ALERT_UUID 0x1811
+#define BLE_OTA_SERVICE_UUID 0x8018
 
-#define RECV_FW_UUID                        0x8020
-#define OTA_BAR_UUID                        0x8021
-#define COMMAND_UUID                        0x8022
-#define CUSTOMER_UUID                       0x8023
+#define RECV_FW_UUID 0x8020
+#define OTA_BAR_UUID 0x8021
+#define COMMAND_UUID 0x8022
+#define CUSTOMER_UUID 0x8023
 
-#if CONFIG_EXAMPLE_EXTENDED_ADV
+#if CONFIG_EXAMPLE_EXTENDED_ADV && !CONFIG_BLE_OTA_EXTERNAL_HOST
 static uint8_t ext_adv_pattern[] = {
-    0x02, 0x01, 0x06,
-    0x03, 0x03, 0xab, 0xcd,
-    0x03, 0x03, 0x18, 0x11,
-    0x0f, 0X09, 'n', 'i', 'm', 'b', 'l', 'e', '-', 'o', 't', 'a', '-', 'e', 'x', 't',
+    0x02, 0x01, 0x06, 0x03, 0x03, 0xab, 0xcd, 0x03, 0x03, 0x18, 0x11, 0x0f, 0X09, 'n',
+    'i',  'm',  'b',  'l',  'e',  '-',  'o',  't',  'a',  '-',  'e',  'x',  't',
 };
 #endif
 
@@ -80,7 +78,8 @@ static const char *TAG = "NimBLE_BLE_OTA";
 static bool start_ota = false;
 static uint32_t cur_sector = 0;
 static uint32_t cur_packet = 0;
-/** Set after in-sector sequence/decrypt failure; stale EOF (0xff) is NACKed until sector is retried cleanly. */
+/** Set after in-sector sequence/decrypt failure; stale EOF (0xff) is NACKed
+ * until sector is retried cleanly. */
 static bool sector_sequence_error = false;
 static uint8_t *fw_buf = NULL;
 static uint32_t fw_buf_offset = 0;
@@ -88,9 +87,7 @@ static uint32_t fw_buf_offset = 0;
 static uint32_t ota_total_len = 0;
 static uint32_t ota_block_size = BUF_LENGTH;
 
-esp_ble_ota_callback_funs_t ota_cb_fun_t = {
-    .recv_fw_cb = NULL
-};
+esp_ble_ota_callback_funs_t ota_cb_fun_t = {.recv_fw_cb = NULL};
 
 #ifndef CONFIG_OTA_WITH_PROTOCOMM
 esp_ble_ota_notification_check_t ota_notification = {
@@ -100,7 +97,11 @@ esp_ble_ota_notification_check_t ota_notification = {
     .customer_ntf_enable = false,
 };
 
+#if !CONFIG_BLE_OTA_EXTERNAL_HOST
 static uint8_t own_addr_type;
+#endif
+
+static esp_ble_ota_abort_cb_t ota_abort_cb = NULL;
 
 static uint16_t connection_handle;
 static uint16_t attribute_handle;
@@ -112,13 +113,16 @@ static uint16_t ota_status_val;
 static uint16_t command_val;
 static uint16_t custom_val;
 
-static int
-esp_ble_ota_gap_event(struct ble_gap_event *event, void *arg);
-static esp_ble_ota_char_t
-find_ota_char_and_desr_by_handle(uint16_t handle);
-static int
-esp_ble_ota_notification_data(uint16_t conn_handle, uint16_t attr_handle, uint8_t cmd_ack[],
-                              esp_ble_ota_char_t ota_char);
+#if !CONFIG_BLE_OTA_EXTERNAL_HOST
+static int esp_ble_ota_gap_event(struct ble_gap_event *event, void *arg);
+#endif
+static esp_ble_ota_char_t find_ota_char_and_desr_by_handle(uint16_t handle);
+static int esp_ble_ota_notification_data(
+    uint16_t conn_handle,
+    uint16_t attr_handle,
+    uint8_t cmd_ack[],
+    esp_ble_ota_char_t ota_char
+);
 #endif
 
 /*----------------------------------------------------
@@ -126,52 +130,45 @@ esp_ble_ota_notification_data(uint16_t conn_handle, uint16_t attr_handle, uint8_
  *----------------------------------------------------*/
 
 void ble_store_config_init(void);
-static uint16_t
-crc16_ccitt(const unsigned char *buf, int len);
-static esp_err_t
-esp_ble_ota_recv_fw_handler(uint8_t *buf, uint32_t length);
+static uint16_t crc16_ccitt(const unsigned char *buf, int len);
+static esp_err_t esp_ble_ota_recv_fw_handler(uint8_t *buf, uint32_t length);
 
 #ifdef CONFIG_PRE_ENC_OTA
 /**
- * Feed one BLE sector worth of ciphertext into esp_encrypted_img in a single ordered chunk.
- * Per-packet decrypt was incorrect with sector retry: AES-GCM state must not advance on
- * dropped or out-of-order packets.
+ * Feed one BLE sector worth of ciphertext into esp_encrypted_img in a single
+ * ordered chunk. Per-packet decrypt was incorrect with sector retry: AES-GCM
+ * state must not advance on dropped or out-of-order packets.
  */
-static esp_err_t
-ble_ota_pre_enc_flush_sector(uint8_t *cipher, size_t cipher_len)
+static esp_err_t ble_ota_pre_enc_flush_sector(uint8_t *cipher, size_t cipher_len)
 {
     pre_enc_decrypt_arg_t pargs = {};
     esp_err_t err;
 
-    if (cipher_len == 0) {
+    if (cipher_len == 0)
         return ESP_OK;
-    }
 
     pargs.data_in = (const char *)cipher;
     pargs.data_in_len = cipher_len;
     err = esp_encrypted_img_decrypt_data(decrypt_handle_cmp, &pargs);
 
-    if ((err == ESP_OK || err == ESP_ERR_NOT_FINISHED) &&
-            pargs.data_out != NULL && pargs.data_out_len > 0) {
-        esp_err_t fw_ret = esp_ble_ota_recv_fw_handler((uint8_t *)pargs.data_out, pargs.data_out_len);
-        if (fw_ret != ESP_OK) {
+    if ((err == ESP_OK || err == ESP_ERR_NOT_FINISHED) && pargs.data_out != NULL &&
+        pargs.data_out_len > 0) {
+        esp_err_t fw_ret =
+            esp_ble_ota_recv_fw_handler((uint8_t *)pargs.data_out, pargs.data_out_len);
+        if (fw_ret != ESP_OK)
             err = fw_ret;
-        }
     }
-    if (pargs.data_out != NULL) {
+    if (pargs.data_out != NULL)
         free(pargs.data_out);
-    }
 
     /* Whole-image decrypt is still in progress; not a per-sector failure. */
-    if (err == ESP_ERR_NOT_FINISHED) {
+    if (err == ESP_ERR_NOT_FINISHED)
         err = ESP_OK;
-    }
     return err;
 }
 #endif
 
-static esp_err_t
-esp_ble_ota_write_chr(struct os_mbuf *om)
+static esp_err_t esp_ble_ota_write_chr(struct os_mbuf *om)
 {
 #ifndef CONFIG_OTA_WITH_PROTOCOMM
     esp_ble_ota_char_t ota_char = find_ota_char_and_desr_by_handle(attribute_handle);
@@ -183,11 +180,8 @@ esp_ble_ota_write_chr(struct os_mbuf *om)
         return ESP_ERR_INVALID_SIZE;
     }
 
-    uint8_t cmd_ack[CMD_ACK_LENGTH] = {0x03, 0x00, 0x00, 0x00, 0x00,
-                                       0x00, 0x00, 0x00, 0x00, 0x00,
-                                       0x00, 0x00, 0x00, 0x00, 0x00,
-                                       0x00, 0x00, 0x00, 0x00, 0x00
-                                      };
+    uint8_t cmd_ack[CMD_ACK_LENGTH] = {0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                                       0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
     uint16_t crc16;
     unsigned int recv_sector = (unsigned int)(om->om_data[0] + (om->om_data[1] * 256));
     uint8_t recv_packet = om->om_data[2];
@@ -196,11 +190,13 @@ esp_ble_ota_write_chr(struct os_mbuf *om)
         if ((om->om_data[0] == 0xff) && (om->om_data[1] == 0xff)) {
             ESP_LOGD(TAG, "Last sector");
         } else {
-            ESP_LOGE(TAG, "%s - sector index error, cur: %" PRIu32 ", recv: %u", __func__,
-                     cur_sector, recv_sector);
+            ESP_LOGE(
+                TAG, "%s - sector index error, cur: %" PRIu32 ", recv: %u", __func__, cur_sector,
+                recv_sector
+            );
             cmd_ack[0] = om->om_data[0];
             cmd_ack[1] = om->om_data[1];
-            cmd_ack[2] = 0x02; //sector index error
+            cmd_ack[2] = 0x02; // sector index error
             cmd_ack[3] = 0x00;
             cmd_ack[4] = cur_sector & 0xff;
             cmd_ack[5] = (cur_sector & 0xff00) >> 8;
@@ -210,9 +206,8 @@ esp_ble_ota_write_chr(struct os_mbuf *om)
             /* Match sender retry: sector restarts at packet 0. */
             cur_packet = 0;
             fw_buf_offset = 0;
-            if (fw_buf) {
+            if (fw_buf)
                 memset(fw_buf, 0x0, ota_block_size);
-            }
             sector_sequence_error = false;
 #ifndef CONFIG_OTA_WITH_PROTOCOMM
             esp_ble_ota_notification_data(connection_handle, attribute_handle, cmd_ack, ota_char);
@@ -224,11 +219,16 @@ esp_ble_ota_write_chr(struct os_mbuf *om)
     if (recv_packet != (uint8_t)cur_packet) {
         if (recv_packet == 0xff) {
             if (sector_sequence_error) {
-                ESP_LOGE(TAG, "%s: sector EOF after packet sequence error, NACK sector %" PRIu32,
-                         __func__, cur_sector);
+                ESP_LOGE(
+                    TAG,
+                    "%s: sector EOF after packet sequence error, NACK "
+                    "sector %" PRIu32,
+                    __func__, cur_sector
+                );
                 cmd_ack[0] = om->om_data[0];
                 cmd_ack[1] = om->om_data[1];
-                cmd_ack[2] = 0x02; /* retry sector (same status byte as sector index error) */
+                cmd_ack[2] = 0x02; /* retry sector (same status byte as sector
+                                      index error) */
                 cmd_ack[3] = 0x00;
                 cmd_ack[4] = cur_sector & 0xff;
                 cmd_ack[5] = (cur_sector & 0xff00) >> 8;
@@ -238,33 +238,34 @@ esp_ble_ota_write_chr(struct os_mbuf *om)
                 sector_sequence_error = false;
                 cur_packet = 0;
                 fw_buf_offset = 0;
-                if (fw_buf) {
+                if (fw_buf)
                     memset(fw_buf, 0x0, ota_block_size);
-                }
 #ifndef CONFIG_OTA_WITH_PROTOCOMM
-                esp_ble_ota_notification_data(connection_handle, attribute_handle, cmd_ack, ota_char);
+                esp_ble_ota_notification_data(
+                    connection_handle, attribute_handle, cmd_ack, ota_char
+                );
 #endif
                 return ESP_ERR_INVALID_STATE;
             }
             ESP_LOGD(TAG, "last packet");
             goto write_ota_data;
         } else {
-            ESP_LOGE(TAG, "%s - packet index error, cur: %" PRIu32 ", recv: %u", __func__,
-                     cur_packet, (unsigned int)recv_packet);
+            ESP_LOGE(
+                TAG, "%s - packet index error, cur: %" PRIu32 ", recv: %u", __func__, cur_packet,
+                (unsigned int)recv_packet
+            );
             sector_sequence_error = true;
             cur_packet = 0;
             fw_buf_offset = 0;
-            if (fw_buf) {
+            if (fw_buf)
                 memset(fw_buf, 0x0, ota_block_size);
-            }
             return ESP_ERR_INVALID_STATE;
         }
     }
 
 write_ota_data:
-    if (recv_packet != 0xff) {
+    if (recv_packet != 0xff)
         sector_sequence_error = false;
-    }
 #ifdef CONFIG_PRE_ENC_OTA
     {
         size_t copy_len = (size_t)mbuf_len - 3;
@@ -273,9 +274,8 @@ write_ota_data:
             if (copy_len < SECTOR_END_ID) {
                 ESP_LOGE(TAG, "%s: last packet too short", __func__);
                 fw_buf_offset = 0;
-                if (fw_buf) {
+                if (fw_buf)
                     memset(fw_buf, 0x0, ota_block_size);
-                }
                 return ESP_ERR_INVALID_SIZE;
             }
             copy_len -= SECTOR_END_ID;
@@ -299,8 +299,10 @@ write_ota_data:
             }
             fw_buf_offset += copy_len;
         }
-        ESP_LOGD(TAG, "DEBUG: Sector:%" PRIu32 ", cipher accum:%" PRIu32 ", +pkt:%u", cur_sector,
-                 fw_buf_offset, (unsigned int)copy_len);
+        ESP_LOGD(
+            TAG, "DEBUG: Sector:%" PRIu32 ", cipher accum:%" PRIu32 ", +pkt:%u", cur_sector,
+            fw_buf_offset, (unsigned int)copy_len
+        );
     }
 #else
     {
@@ -310,16 +312,14 @@ write_ota_data:
             if (copy_len < SECTOR_END_ID) {
                 ESP_LOGE(TAG, "%s: last packet too short", __func__);
                 fw_buf_offset = 0;
-                if (fw_buf) {
+                if (fw_buf)
                     memset(fw_buf, 0x0, ota_block_size);
-                }
                 return ESP_ERR_INVALID_SIZE;
             }
             copy_len -= SECTOR_END_ID;
         }
-        if (fw_buf == NULL) {
+        if (fw_buf == NULL)
             return ESP_ERR_INVALID_STATE;
-        }
         if (fw_buf_offset + copy_len > ota_block_size) {
             ESP_LOGE(TAG, "%s: sector ciphertext overflow", __func__);
             fw_buf_offset = 0;
@@ -335,8 +335,10 @@ write_ota_data:
             }
             fw_buf_offset += copy_len;
         }
-        ESP_LOGD(TAG, "DEBUG: Sector:%" PRIu32 ", total length:%" PRIu32 ", length:%u", cur_sector,
-                 fw_buf_offset, (unsigned int)copy_len);
+        ESP_LOGD(
+            TAG, "DEBUG: Sector:%" PRIu32 ", total length:%" PRIu32 ", length:%u", cur_sector,
+            fw_buf_offset, (unsigned int)copy_len
+        );
     }
 #endif
     if (recv_packet == 0xff) {
@@ -375,11 +377,10 @@ write_ota_data:
 
 sector_end:
 #ifndef CONFIG_PRE_ENC_OTA
-    if (fw_buf_offset < ota_block_size) {
+    if (fw_buf_offset < ota_block_size)
         esp_ble_ota_recv_fw_handler(fw_buf, fw_buf_offset);
-    } else {
+    else
         esp_ble_ota_recv_fw_handler(fw_buf, 4096);
-    }
 #endif
 
     fw_buf_offset = 0;
@@ -388,7 +389,7 @@ sector_end:
 
     cmd_ack[0] = om->om_data[0];
     cmd_ack[1] = om->om_data[1];
-    cmd_ack[2] = 0x00; //success
+    cmd_ack[2] = 0x00; // success
     cmd_ack[3] = 0x00;
     crc16 = crc16_ccitt(cmd_ack, 18);
     cmd_ack[18] = crc16 & 0xff;
@@ -408,13 +409,11 @@ static uint16_t crc16_ccitt(const unsigned char *buf, int len)
     while (len--) {
         crc16 ^= *buf++ << 8;
 
-        for (i = 0; i < 8; i++) {
-            if (crc16 & 0x8000) {
+        for (i = 0; i < 8; i++)
+            if (crc16 & 0x8000)
                 crc16 = (crc16 << 1) ^ 0x1021;
-            } else {
+            else
                 crc16 = crc16 << 1;
-            }
-        }
     }
 
     return crc16;
@@ -430,12 +429,10 @@ unsigned int esp_ble_ota_get_fw_length(void)
     return ota_total_len;
 }
 
-static esp_err_t
-esp_ble_ota_recv_fw_handler(uint8_t *buf, uint32_t length)
+static esp_err_t esp_ble_ota_recv_fw_handler(uint8_t *buf, uint32_t length)
 {
-    if (ota_cb_fun_t.recv_fw_cb) {
+    if (ota_cb_fun_t.recv_fw_cb)
         ota_cb_fun_t.recv_fw_cb(buf, length);
-    }
 
     return ESP_OK;
 }
@@ -447,8 +444,10 @@ esp_err_t esp_ble_ota_recv_fw_data_callback(esp_ble_ota_recv_fw_cb_t callback)
     return ESP_OK;
 }
 #else
-esp_err_t esp_ble_ota_recv_fw_data_callback(esp_ble_ota_recv_fw_cb_t callback,
-                                            esp_decrypt_handle_t esp_decrypt_handle)
+esp_err_t esp_ble_ota_recv_fw_data_callback(
+    esp_ble_ota_recv_fw_cb_t callback,
+    esp_decrypt_handle_t esp_decrypt_handle
+)
 {
     decrypt_handle_cmp = esp_decrypt_handle;
     ota_cb_fun_t.recv_fw_cb = callback;
@@ -461,15 +460,13 @@ esp_err_t esp_ble_ota_recv_fw_data_callback(esp_ble_ota_recv_fw_cb_t callback,
  *----------------------------------------------------*/
 
 #ifdef CONFIG_OTA_WITH_PROTOCOMM
-void
-esp_ble_ota_set_sizes(size_t file_size, size_t block_size)
+void esp_ble_ota_set_sizes(size_t file_size, size_t block_size)
 {
     ota_total_len = file_size;
     ota_block_size = block_size;
 }
 
-void
-esp_ble_ota_finish(void)
+void esp_ble_ota_finish(void)
 {
     ESP_LOGI(TAG, "Received OTA end command");
     start_ota = false;
@@ -483,13 +480,11 @@ esp_ble_ota_finish(void)
     fw_buf = NULL;
 }
 
-esp_err_t
-esp_ble_ota_write(uint8_t *file, size_t length)
+esp_err_t esp_ble_ota_write(uint8_t *file, size_t length)
 {
     struct os_mbuf *om = ble_hs_mbuf_from_flat(file, length);
-    if (om == NULL) {
+    if (om == NULL)
         return ESP_ERR_NO_MEM;
-    }
     esp_err_t err = esp_ble_ota_write_chr(om);
     os_mbuf_free_chain(om);
     return err;
@@ -500,22 +495,18 @@ esp_ble_ota_write(uint8_t *file, size_t length)
  * OTA without protocomm api's
  *----------------------------------------------------*/
 
-static void
-ble_ota_start_write_chr(struct os_mbuf *om)
+static void ble_ota_start_write_chr(struct os_mbuf *om)
 {
-    uint8_t cmd_ack[CMD_ACK_LENGTH] = {0x03, 0x00, 0x00, 0x00, 0x00,
-                                       0x00, 0x00, 0x00, 0x00, 0x00,
-                                       0x00, 0x00, 0x00, 0x00, 0x00,
-                                       0x00, 0x00, 0x00, 0x00, 0x00
-                                      };
+    uint8_t cmd_ack[CMD_ACK_LENGTH] = {0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                                       0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
     uint16_t crc16;
 
     esp_ble_ota_char_t ota_char = find_ota_char_and_desr_by_handle(attribute_handle);
     if ((om->om_data[0] == 0x01) && (om->om_data[1] == 0x00)) {
         start_ota = true;
 
-        ota_total_len = (om->om_data[2]) + (om->om_data[3] * 256) +
-                        (om->om_data[4] * 256 * 256) + (om->om_data[5] * 256 * 256 * 256);
+        ota_total_len = (om->om_data[2]) + (om->om_data[3] * 256) + (om->om_data[4] * 256 * 256) +
+                        (om->om_data[5] * 256 * 256 * 256);
 
 #ifdef CONFIG_PRE_ENC_OTA
         ota_total_len -= ENC_HEADER;
@@ -532,11 +523,10 @@ ble_ota_start_write_chr(struct os_mbuf *om)
             fw_buf = NULL;
         }
         fw_buf = (uint8_t *)malloc(ota_block_size * sizeof(uint8_t));
-        if (fw_buf == NULL) {
+        if (fw_buf == NULL)
             ESP_LOGE(TAG, "%s -  malloc fail", __func__);
-        } else {
+        else
             memset(fw_buf, 0x0, ota_block_size);
-        }
         cmd_ack[2] = 0x01;
         cmd_ack[3] = 0x00;
         crc16 = crc16_ccitt(cmd_ack, 18);
@@ -544,12 +534,10 @@ ble_ota_start_write_chr(struct os_mbuf *om)
         cmd_ack[19] = (crc16 & 0xff00) >> 8;
         esp_ble_ota_notification_data(connection_handle, attribute_handle, cmd_ack, ota_char);
     } else if ((om->om_data[0] == 0x02) && (om->om_data[1] == 0x00)) {
-        printf("\nCMD_CHAR -> 0 : %d, 1 : %d", om->om_data[0],
-               om->om_data[1]);
+        printf("\nCMD_CHAR -> 0 : %d, 1 : %d", om->om_data[0], om->om_data[1]);
 #ifdef CONFIG_PRE_ENC_OTA
-        if (esp_encrypted_img_decrypt_end(decrypt_handle_cmp) != ESP_OK) {
+        if (esp_encrypted_img_decrypt_end(decrypt_handle_cmp) != ESP_OK)
             ESP_LOGI(TAG, "Decryption end failed");
-        }
 #endif
         extern SemaphoreHandle_t notify_sem;
         xSemaphoreTake(notify_sem, portMAX_DELAY);
@@ -575,30 +563,34 @@ ble_ota_start_write_chr(struct os_mbuf *om)
     }
 }
 
-static void
-gatt_svr_register_cb(struct ble_gatt_register_ctxt *ctxt, void *arg)
+#if !CONFIG_BLE_OTA_EXTERNAL_HOST
+static void gatt_svr_register_cb(struct ble_gatt_register_ctxt *ctxt, void *arg)
 {
     char buf[BLE_UUID_STR_LEN];
 
     switch (ctxt->op) {
     case BLE_GATT_REGISTER_OP_SVC:
-        ESP_LOGD(TAG, "registered service %s with handle=%d\n",
-                 ble_uuid_to_str(ctxt->svc.svc_def->uuid, buf),
-                 ctxt->svc.handle);
+        ESP_LOGD(
+            TAG, "registered service %s with handle=%d\n",
+            ble_uuid_to_str(ctxt->svc.svc_def->uuid, buf), ctxt->svc.handle
+        );
         break;
 
     case BLE_GATT_REGISTER_OP_CHR:
-        ESP_LOGD(TAG, "registering characteristic %s with "
-                 "def_handle=%d val_handle=%d\n",
-                 ble_uuid_to_str(ctxt->chr.chr_def->uuid, buf),
-                 ctxt->chr.def_handle,
-                 ctxt->chr.val_handle);
+        ESP_LOGD(
+            TAG,
+            "registering characteristic %s with "
+            "def_handle=%d val_handle=%d\n",
+            ble_uuid_to_str(ctxt->chr.chr_def->uuid, buf), ctxt->chr.def_handle,
+            ctxt->chr.val_handle
+        );
         break;
 
     case BLE_GATT_REGISTER_OP_DSC:
-        ESP_LOGD(TAG, "registering descriptor %s with handle=%d\n",
-                 ble_uuid_to_str(ctxt->dsc.dsc_def->uuid, buf),
-                 ctxt->dsc.handle);
+        ESP_LOGD(
+            TAG, "registering descriptor %s with handle=%d\n",
+            ble_uuid_to_str(ctxt->dsc.dsc_def->uuid, buf), ctxt->dsc.handle
+        );
         break;
 
     default:
@@ -606,11 +598,14 @@ gatt_svr_register_cb(struct ble_gatt_register_ctxt *ctxt, void *arg)
         break;
     }
 }
+#endif
 
-static int
-ble_ota_gatt_handler(uint16_t conn_handle, uint16_t attr_handle,
-                     struct ble_gatt_access_ctxt *ctxt,
-                     void *arg)
+static int ble_ota_gatt_handler(
+    uint16_t conn_handle,
+    uint16_t attr_handle,
+    struct ble_gatt_access_ctxt *ctxt,
+    void *arg
+)
 {
     esp_ble_ota_char_t ota_char;
 
@@ -648,53 +643,61 @@ ble_ota_gatt_handler(uint16_t conn_handle, uint16_t attr_handle,
     return 0;
 }
 
+/* All OTA characteristics require an encrypted link (pairing) for read and
+ * write access. */
+#define BLE_OTA_CHR_F_ENC (BLE_GATT_CHR_F_WRITE_ENC | BLE_GATT_CHR_F_READ_ENC)
+
 static const struct ble_gatt_svc_def ota_gatt_db[] = {
     {
         /* OTA Service Declaration */
         .type = BLE_GATT_SVC_TYPE_PRIMARY,
         .uuid = BLE_UUID16_DECLARE(BLE_OTA_SERVICE_UUID),
-        .characteristics = (struct ble_gatt_chr_def[])
-        {
-            {
-                /* Receive Firmware Characteristic */
-                .uuid = BLE_UUID16_DECLARE(RECV_FW_UUID),
-                .access_cb = ble_ota_gatt_handler,
-                .val_handle = &receive_fw_val,
-                .flags = BLE_GATT_CHR_F_INDICATE | BLE_GATT_CHR_F_WRITE,
-            }, {
-                /* OTA Characteristic */
-                .uuid = BLE_UUID16_DECLARE(OTA_BAR_UUID),
-                .access_cb = ble_ota_gatt_handler,
-                .val_handle = &ota_status_val,
-                .flags = BLE_GATT_CHR_F_INDICATE | BLE_GATT_CHR_F_READ,
-            }, {
-                /* Command Characteristic */
-                .uuid = BLE_UUID16_DECLARE(COMMAND_UUID),
-                .access_cb = ble_ota_gatt_handler,
-                .val_handle = &command_val,
-                .flags = BLE_GATT_CHR_F_INDICATE | BLE_GATT_CHR_F_WRITE,
-            }, {
-                /* Customer characteristic */
-                .uuid = BLE_UUID16_DECLARE(CUSTOMER_UUID),
-                .access_cb = ble_ota_gatt_handler,
-                .val_handle = &custom_val,
-                .flags = BLE_GATT_CHR_F_INDICATE | BLE_GATT_CHR_F_WRITE,
-            }, {
-                0, /* No more characteristics in this service */
-            }
-        },
+        .characteristics =
+            (struct ble_gatt_chr_def[]){
+                {
+                    /* Receive Firmware Characteristic */
+                    .uuid = BLE_UUID16_DECLARE(RECV_FW_UUID),
+                    .access_cb = ble_ota_gatt_handler,
+                    .val_handle = &receive_fw_val,
+                    .flags = BLE_GATT_CHR_F_INDICATE | BLE_GATT_CHR_F_WRITE |
+                             BLE_GATT_CHR_F_WRITE_NO_RSP | BLE_OTA_CHR_F_ENC,
+                },
+                {
+                    /* OTA Characteristic */
+                    .uuid = BLE_UUID16_DECLARE(OTA_BAR_UUID),
+                    .access_cb = ble_ota_gatt_handler,
+                    .val_handle = &ota_status_val,
+                    .flags = BLE_GATT_CHR_F_INDICATE | BLE_GATT_CHR_F_READ | BLE_OTA_CHR_F_ENC,
+                },
+                {
+                    /* Command Characteristic */
+                    .uuid = BLE_UUID16_DECLARE(COMMAND_UUID),
+                    .access_cb = ble_ota_gatt_handler,
+                    .val_handle = &command_val,
+                    .flags = BLE_GATT_CHR_F_INDICATE | BLE_GATT_CHR_F_WRITE | BLE_OTA_CHR_F_ENC,
+                },
+                {
+                    /* Customer characteristic */
+                    .uuid = BLE_UUID16_DECLARE(CUSTOMER_UUID),
+                    .access_cb = ble_ota_gatt_handler,
+                    .val_handle = &custom_val,
+                    .flags = BLE_GATT_CHR_F_INDICATE | BLE_GATT_CHR_F_WRITE | BLE_OTA_CHR_F_ENC,
+                },
+                {
+                    0, /* No more characteristics in this service */
+                }
+            },
     },
     {
         0, /* No more services */
     },
 };
 
-static esp_ble_ota_char_t
-find_ota_char_and_desr_by_handle(uint16_t handle)
+static esp_ble_ota_char_t find_ota_char_and_desr_by_handle(uint16_t handle)
 {
     esp_ble_ota_char_t ret = INVALID_CHAR;
 
-    for (int i = 0; i < OTA_IDX_NB ; i++) {
+    for (int i = 0; i < OTA_IDX_NB; i++) {
         if (handle == ota_handle_table[i]) {
             switch (i) {
             case RECV_FW_CHAR_VAL_IDX:
@@ -718,9 +721,12 @@ find_ota_char_and_desr_by_handle(uint16_t handle)
     return ret;
 }
 
-static int
-esp_ble_ota_notification_data(uint16_t conn_handle, uint16_t attr_handle, uint8_t cmd_ack[],
-                              esp_ble_ota_char_t ota_char)
+static int esp_ble_ota_notification_data(
+    uint16_t conn_handle,
+    uint16_t attr_handle,
+    uint8_t cmd_ack[],
+    esp_ble_ota_char_t ota_char
+)
 {
     struct os_mbuf *txom;
     bool notify_enable = false;
@@ -729,24 +735,20 @@ esp_ble_ota_notification_data(uint16_t conn_handle, uint16_t attr_handle, uint8_
 
     switch (ota_char) {
     case RECV_FW_CHAR:
-        if (ota_notification.recv_fw_ntf_enable) {
+        if (ota_notification.recv_fw_ntf_enable)
             notify_enable = true;
-        }
         break;
     case OTA_STATUS_CHAR:
-        if (ota_notification.process_bar_ntf_enable) {
+        if (ota_notification.process_bar_ntf_enable)
             notify_enable = true;
-        }
         break;
     case CMD_CHAR:
-        if (ota_notification.command_ntf_enable) {
+        if (ota_notification.command_ntf_enable)
             notify_enable = true;
-        }
         break;
     case CUS_CHAR:
-        if (ota_notification.customer_ntf_enable) {
+        if (ota_notification.customer_ntf_enable)
             notify_enable = true;
-        }
         break;
     case INVALID_CHAR:
         break;
@@ -754,11 +756,10 @@ esp_ble_ota_notification_data(uint16_t conn_handle, uint16_t attr_handle, uint8_
 
     if (notify_enable) {
         rc = ble_gattc_notify_custom(conn_handle, attr_handle, txom);
-        if (rc == 0) {
+        if (rc == 0)
             ESP_LOGD(TAG, "Notification sent, attr_handle = %d", attr_handle);
-        } else {
+        else
             ESP_LOGE(TAG, "Error in sending notification, rc = %d", rc);
-        }
         return rc;
     }
 
@@ -767,8 +768,7 @@ esp_ble_ota_notification_data(uint16_t conn_handle, uint16_t attr_handle, uint8_
     return ESP_FAIL;
 }
 
-static void
-esp_ble_ota_fill_handle_table(void)
+static void esp_ble_ota_fill_handle_table(void)
 {
     ota_handle_table[RECV_FW_CHAR] = receive_fw_val;
     ota_handle_table[OTA_STATUS_CHAR] = ota_status_val;
@@ -776,41 +776,130 @@ esp_ble_ota_fill_handle_table(void)
     ota_handle_table[CUS_CHAR] = custom_val;
 }
 
-static void
-print_addr(const void *addr)
+#if CONFIG_BLE_OTA_EXTERNAL_HOST
+#if !MYNEWT_VAL(BLE_DYNAMIC_SERVICE)
+#error                                                                                             \
+    "CONFIG_BLE_OTA_EXTERNAL_HOST requires NimBLE dynamic services (CONFIG_BT_NIMBLE_DYNAMIC_SERVICE)"
+#endif
+
+esp_err_t esp_ble_ota_gatt_register(void)
+{
+    int rc = ble_gatts_add_dynamic_svcs(ota_gatt_db);
+    if (rc != 0) {
+        ESP_LOGE(TAG, "failed to add OTA service; rc=%d", rc);
+        return ESP_FAIL;
+    }
+
+    /* Value handles are written synchronously during registration, so the table
+     * can be filled now.
+     */
+    esp_ble_ota_fill_handle_table();
+    ESP_LOGD(
+        TAG, "OTA handles: recv_fw=%d status=%d cmd=%d cus=%d", receive_fw_val, ota_status_val,
+        command_val, custom_val
+    );
+    return ESP_OK;
+}
+#endif
+
+esp_err_t esp_ble_ota_set_abort_cb(esp_ble_ota_abort_cb_t callback)
+{
+    ota_abort_cb = callback;
+    return ESP_OK;
+}
+
+void esp_ble_ota_on_connect(uint16_t conn_handle)
+{
+    connection_handle = conn_handle;
+    esp_ble_ota_fill_handle_table();
+}
+
+void esp_ble_ota_on_disconnect(void)
+{
+    bool was_running = start_ota;
+
+    if (was_running) {
+        extern SemaphoreHandle_t notify_sem;
+        xSemaphoreTake(notify_sem, portMAX_DELAY);
+        start_ota = false;
+        ota_total_len = 0;
+        xSemaphoreGive(notify_sem);
+    }
+
+    sector_sequence_error = false;
+    cur_sector = 0;
+    cur_packet = 0;
+    fw_buf_offset = 0;
+    free(fw_buf);
+    fw_buf = NULL;
+
+    ota_notification.recv_fw_ntf_enable = false;
+    ota_notification.process_bar_ntf_enable = false;
+    ota_notification.command_ntf_enable = false;
+    ota_notification.customer_ntf_enable = false;
+
+    if (was_running) {
+        ESP_LOGW(TAG, "disconnected during OTA, aborting");
+        if (ota_abort_cb)
+            ota_abort_cb();
+    }
+}
+
+void esp_ble_ota_on_subscribe(uint16_t attr_handle, bool indicate)
+{
+    esp_ble_ota_char_t ota_char = find_ota_char_and_desr_by_handle(attr_handle);
+
+    switch (ota_char) {
+    case RECV_FW_CHAR:
+        ota_notification.recv_fw_ntf_enable = indicate;
+        break;
+    case OTA_STATUS_CHAR:
+        ota_notification.process_bar_ntf_enable = indicate;
+        break;
+    case CMD_CHAR:
+        ota_notification.command_ntf_enable = indicate;
+        break;
+    case CUS_CHAR:
+        ota_notification.customer_ntf_enable = indicate;
+        break;
+    case INVALID_CHAR:
+        break;
+    }
+}
+
+#if !CONFIG_BLE_OTA_EXTERNAL_HOST
+
+static void print_addr(const void *addr)
 {
     const uint8_t *u8p;
 
     u8p = addr;
-    ESP_LOGI(TAG, "%02x:%02x:%02x:%02x:%02x:%02x",
-             u8p[5], u8p[4], u8p[3], u8p[2], u8p[1], u8p[0]);
+    ESP_LOGI(TAG, "%02x:%02x:%02x:%02x:%02x:%02x", u8p[5], u8p[4], u8p[3], u8p[2], u8p[1], u8p[0]);
 }
 
 /**
  * Logs information about a connection to the console.
  */
-static void
-esp_ble_ota_print_conn_desc(struct ble_gap_conn_desc *desc)
+static void esp_ble_ota_print_conn_desc(struct ble_gap_conn_desc *desc)
 {
-    ESP_LOGI(TAG, "handle=%d our_ota_addr_type=%d our_ota_addr=",
-             desc->conn_handle, desc->our_ota_addr.type);
+    ESP_LOGI(
+        TAG, "handle=%d our_ota_addr_type=%d our_ota_addr=", desc->conn_handle,
+        desc->our_ota_addr.type
+    );
     print_addr(desc->our_ota_addr.val);
-    ESP_LOGI(TAG, " our_id_addr_type=%d our_id_addr=",
-             desc->our_id_addr.type);
+    ESP_LOGI(TAG, " our_id_addr_type=%d our_id_addr=", desc->our_id_addr.type);
     print_addr(desc->our_id_addr.val);
-    ESP_LOGI(TAG, " peer_ota_addr_type=%d peer_ota_addr=",
-             desc->peer_ota_addr.type);
+    ESP_LOGI(TAG, " peer_ota_addr_type=%d peer_ota_addr=", desc->peer_ota_addr.type);
     print_addr(desc->peer_ota_addr.val);
-    ESP_LOGI(TAG, " peer_id_addr_type=%d peer_id_addr=",
-             desc->peer_id_addr.type);
+    ESP_LOGI(TAG, " peer_id_addr_type=%d peer_id_addr=", desc->peer_id_addr.type);
     print_addr(desc->peer_id_addr.val);
-    ESP_LOGI(TAG, " conn_itvl=%d conn_latency=%d supervision_timeout=%d "
-             "encrypted=%d authenticated=%d bonded=%d\n",
-             desc->conn_itvl, desc->conn_latency,
-             desc->supervision_timeout,
-             desc->sec_state.encrypted,
-             desc->sec_state.authenticated,
-             desc->sec_state.bonded);
+    ESP_LOGI(
+        TAG,
+        " conn_itvl=%d conn_latency=%d supervision_timeout=%d "
+        "encrypted=%d authenticated=%d bonded=%d\n",
+        desc->conn_itvl, desc->conn_latency, desc->supervision_timeout, desc->sec_state.encrypted,
+        desc->sec_state.authenticated, desc->sec_state.bonded
+    );
 }
 
 /**
@@ -819,8 +908,7 @@ esp_ble_ota_print_conn_desc(struct ble_gap_conn_desc *desc)
  *     o Undirected connectable mode.
  */
 #if CONFIG_EXAMPLE_EXTENDED_ADV
-static void
-esp_ble_ota_ext_advertise(void)
+static void esp_ble_ota_ext_advertise(void)
 {
     struct ble_gap_ext_adv_params params;
     struct os_mbuf *data;
@@ -828,9 +916,8 @@ esp_ble_ota_ext_advertise(void)
     int rc;
 
     /* First check if any instance is already active */
-    if (ble_gap_adv_active()) {
+    if (ble_gap_adv_active())
         return;
-    }
 
     /* use defaults for non-set params */
     memset(&params, 0, sizeof(params));
@@ -851,8 +938,7 @@ esp_ble_ota_ext_advertise(void)
     params.itvl_max = BLE_GAP_ADV_FAST_INTERVAL1_MIN;
 
     /* configure instance 0 */
-    rc = ble_gap_ext_adv_configure(instance, &params, NULL,
-                                   esp_ble_ota_gap_event, NULL);
+    rc = ble_gap_ext_adv_configure(instance, &params, NULL, esp_ble_ota_gap_event, NULL);
     assert(rc == 0);
     /* in this case only scan response is allowed */
 
@@ -872,8 +958,7 @@ esp_ble_ota_ext_advertise(void)
     assert(rc == 0);
 }
 #else
-static void
-esp_ble_ota_advertise(void)
+static void esp_ble_ota_advertise(void)
 {
     struct ble_gap_adv_params adv_params;
     struct ble_hs_adv_fields fields;
@@ -894,8 +979,7 @@ esp_ble_ota_advertise(void)
      *     o Discoverability in forthcoming advertisement (general)
      *     o BLE-only (BR/EDR unsupported).
      */
-    fields.flags = BLE_HS_ADV_F_DISC_GEN |
-                   BLE_HS_ADV_F_BREDR_UNSUP;
+    fields.flags = BLE_HS_ADV_F_DISC_GEN | BLE_HS_ADV_F_BREDR_UNSUP;
 
     /* Indicate that the TX power level field should be included; have the
      * stack fill this value automatically.  This is done by assigning the
@@ -909,9 +993,7 @@ esp_ble_ota_advertise(void)
     fields.name_len = strlen(name);
     fields.name_is_complete = 1;
 
-    fields.uuids16 = (ble_uuid16_t[]) {
-        BLE_UUID16_INIT(GATT_SVR_SVC_ALERT_UUID)
-    };
+    fields.uuids16 = (ble_uuid16_t[]){BLE_UUID16_INIT(GATT_SVR_SVC_ALERT_UUID)};
     fields.num_uuids16 = 1;
     fields.uuids16_is_complete = 1;
 
@@ -925,8 +1007,9 @@ esp_ble_ota_advertise(void)
     memset(&adv_params, 0, sizeof adv_params);
     adv_params.conn_mode = BLE_GAP_CONN_MODE_UND;
     adv_params.disc_mode = BLE_GAP_DISC_MODE_GEN;
-    rc = ble_gap_adv_start(own_addr_type, NULL, BLE_HS_FOREVER,
-                           &adv_params, esp_ble_ota_gap_event, NULL);
+    rc = ble_gap_adv_start(
+        own_addr_type, NULL, BLE_HS_FOREVER, &adv_params, esp_ble_ota_gap_event, NULL
+    );
     if (rc != 0) {
         ESP_LOGE(TAG, "error enabling advertisement; rc=%d\n", rc);
         return;
@@ -949,8 +1032,7 @@ esp_ble_ota_advertise(void)
  *                                  of the return code is specific to the
  *                                  particular GAP event being signalled.
  */
-static int
-esp_ble_ota_gap_event(struct ble_gap_event *event, void *arg)
+static int esp_ble_ota_gap_event(struct ble_gap_event *event, void *arg)
 {
     struct ble_gap_conn_desc desc;
     int rc;
@@ -959,14 +1041,15 @@ esp_ble_ota_gap_event(struct ble_gap_event *event, void *arg)
     switch (event->type) {
     case BLE_GAP_EVENT_CONNECT:
         /* A new connection was established or a connection attempt failed. */
-        ESP_LOGI(TAG, "connection %s; status=%d ",
-                 event->connect.status == 0 ? "established" : "failed",
-                 event->connect.status);
+        ESP_LOGI(
+            TAG, "connection %s; status=%d ", event->connect.status == 0 ? "established" : "failed",
+            event->connect.status
+        );
         if (event->connect.status == 0) {
             rc = ble_gap_conn_find(event->connect.conn_handle, &desc);
             assert(rc == 0);
             esp_ble_ota_print_conn_desc(&desc);
-            connection_handle = event->connect.conn_handle;
+            esp_ble_ota_on_connect(event->connect.conn_handle);
         } else {
             /* Connection failed; resume advertising. */
 #if CONFIG_EXAMPLE_EXTENDED_ADV
@@ -975,12 +1058,12 @@ esp_ble_ota_gap_event(struct ble_gap_event *event, void *arg)
             esp_ble_ota_advertise();
 #endif
         }
-        esp_ble_ota_fill_handle_table();
         return 0;
 
     case BLE_GAP_EVENT_DISCONNECT:
         ESP_LOGI(TAG, "disconnect; reason=%d ", event->disconnect.reason);
         esp_ble_ota_print_conn_desc(&event->disconnect.conn);
+        esp_ble_ota_on_disconnect();
 
         /* Connection terminated; resume advertising. */
 #if CONFIG_EXAMPLE_EXTENDED_ADV
@@ -992,16 +1075,14 @@ esp_ble_ota_gap_event(struct ble_gap_event *event, void *arg)
 
     case BLE_GAP_EVENT_CONN_UPDATE:
         /* The central has updated the connection parameters. */
-        ESP_LOGI(TAG, "connection updated; status=%d ",
-                 event->conn_update.status);
+        ESP_LOGI(TAG, "connection updated; status=%d ", event->conn_update.status);
         rc = ble_gap_conn_find(event->conn_update.conn_handle, &desc);
         assert(rc == 0);
         esp_ble_ota_print_conn_desc(&desc);
         return 0;
 
     case BLE_GAP_EVENT_ADV_COMPLETE:
-        ESP_LOGI(TAG, "advertise complete; reason=%d",
-                 event->adv_complete.reason);
+        ESP_LOGI(TAG, "advertise complete; reason=%d", event->adv_complete.reason);
 #ifdef CONFIG_EXAMPLE_EXTENDED_ADV
         esp_ble_ota_ext_advertise();
 #else
@@ -1011,8 +1092,7 @@ esp_ble_ota_gap_event(struct ble_gap_event *event, void *arg)
 
     case BLE_GAP_EVENT_ENC_CHANGE:
         /* Encryption has been enabled or disabled for this connection. */
-        ESP_LOGI(TAG, "encryption change event; status=%d ",
-                 event->enc_change.status);
+        ESP_LOGI(TAG, "encryption change event; status=%d ", event->enc_change.status);
         rc = ble_gap_conn_find(event->enc_change.conn_handle, &desc);
         assert(rc == 0);
         esp_ble_ota_print_conn_desc(&desc);
@@ -1022,39 +1102,23 @@ esp_ble_ota_gap_event(struct ble_gap_event *event, void *arg)
         ota_char = find_ota_char_and_desr_by_handle(event->subscribe.attr_handle);
         ESP_LOGI(TAG, "client subscribe ble_gap_event, ota_char: %d", ota_char);
 
-        ESP_LOGI(TAG, "subscribe event; conn_handle=%d attr_handle=%d "
-                 "reason=%d prevn=%d curn=%d previ=%d curi=%d\n",
-                 event->subscribe.conn_handle,
-                 event->subscribe.attr_handle,
-                 event->subscribe.reason,
-                 event->subscribe.prev_notify,
-                 event->subscribe.cur_notify,
-                 event->subscribe.prev_indicate,
-                 event->subscribe.cur_indicate);
+        ESP_LOGI(
+            TAG,
+            "subscribe event; conn_handle=%d attr_handle=%d "
+            "reason=%d prevn=%d curn=%d previ=%d curi=%d\n",
+            event->subscribe.conn_handle, event->subscribe.attr_handle, event->subscribe.reason,
+            event->subscribe.prev_notify, event->subscribe.cur_notify,
+            event->subscribe.prev_indicate, event->subscribe.cur_indicate
+        );
 
-        switch (ota_char) {
-        case RECV_FW_CHAR:
-            ota_notification.recv_fw_ntf_enable = true;
-            break;
-        case OTA_STATUS_CHAR:
-            ota_notification.process_bar_ntf_enable = true;
-            break;
-        case CMD_CHAR:
-            ota_notification.command_ntf_enable = true;
-            break;
-        case CUS_CHAR:
-            ota_notification.customer_ntf_enable = true;
-            break;
-        case INVALID_CHAR:
-            break;
-        }
+        esp_ble_ota_on_subscribe(event->subscribe.attr_handle, event->subscribe.cur_indicate);
         return 0;
 
     case BLE_GAP_EVENT_MTU:
-        ESP_LOGI(TAG, "mtu update event; conn_handle=%d cid=%d mtu=%d\n",
-                 event->mtu.conn_handle,
-                 event->mtu.channel_id,
-                 event->mtu.value);
+        ESP_LOGI(
+            TAG, "mtu update event; conn_handle=%d cid=%d mtu=%d\n", event->mtu.conn_handle,
+            event->mtu.channel_id, event->mtu.value
+        );
         return 0;
 
     case BLE_GAP_EVENT_REPEAT_PAIRING:
@@ -1081,8 +1145,7 @@ esp_ble_ota_gap_event(struct ble_gap_event *event, void *arg)
     return 0;
 }
 
-int
-ble_ota_gatt_svr_init(void)
+int ble_ota_gatt_svr_init(void)
 {
     int rc;
 
@@ -1090,26 +1153,22 @@ ble_ota_gatt_svr_init(void)
     ble_svc_gatt_init();
 
     rc = ble_gatts_count_cfg(ota_gatt_db);
-    if (rc != 0) {
+    if (rc != 0)
         return rc;
-    }
 
     rc = ble_gatts_add_svcs(ota_gatt_db);
-    if (rc != 0) {
+    if (rc != 0)
         return rc;
-    }
 
     return 0;
 }
 
-static void
-esp_ble_ota_on_reset(int reason)
+static void esp_ble_ota_on_reset(int reason)
 {
     ESP_LOGE(TAG, "Resetting state; reason=%d\n", reason);
 }
 
-static void
-esp_ble_ota_on_sync(void)
+static void esp_ble_ota_on_sync(void)
 {
     int rc;
 
@@ -1135,7 +1194,6 @@ esp_ble_ota_on_sync(void)
 #else
     esp_ble_ota_advertise();
 #endif
-
 }
 
 void esp_ble_ota_host_task(void *param)
@@ -1147,8 +1205,7 @@ void esp_ble_ota_host_task(void *param)
     nimble_port_freertos_deinit();
 }
 
-esp_err_t
-esp_ble_ota_host_init(void)
+esp_err_t esp_ble_ota_host_init(void)
 {
     int rc;
 
@@ -1187,4 +1244,5 @@ esp_ble_ota_host_init(void)
 
     return 0;
 }
-#endif
+#endif /* !CONFIG_BLE_OTA_EXTERNAL_HOST */
+#endif /* !CONFIG_OTA_WITH_PROTOCOMM */

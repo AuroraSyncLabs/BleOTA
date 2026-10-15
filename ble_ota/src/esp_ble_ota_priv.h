@@ -26,7 +26,7 @@
  * @return
  *  - ESP_OK      : OTA will be stopped
  *  - ESP_FAIL    : Failed to stop ota
-*/
+ */
 esp_err_t esp_ble_ota_mgr_done(void);
 
 /**
@@ -37,7 +37,7 @@ esp_err_t esp_ble_ota_mgr_done(void);
  * @return
  *  - ESP_OK   : success
  *  - ESP_ERR_INVALID_ARG : null argument
-*/
+ */
 esp_err_t get_ota_handlers(ota_handlers_t *ptr);
 
 #endif /* CONFIG_OTA_WITH_PROTOCOMM */
