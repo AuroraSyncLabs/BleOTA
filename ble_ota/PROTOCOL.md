@@ -22,10 +22,12 @@ Enable notifications (CCCD `0x0001`) on RECV_FW and COMMAND before starting.
 3. Send the firmware in 4096-byte sectors (the last one may be shorter). After each sector, wait for its ack:
    - `0x0000`: send the next sector.
    - `0x0002`: resend from the sector given in the ack.
-   - `0x0003`: transfer aborted (pre-encrypted OTA, the sector could not be decrypted or stored): stop.
+   - `0x0003`: transfer aborted (the sector goes beyond the announced length or, with pre-encrypted
+     OTA, could not be decrypted or stored): stop.
 4. Write STOP on COMMAND, wait for its ack (sent once the image is verified, can take a few seconds).
    - Accepted: the device reboots into the new firmware.
-   - Refused: the update failed, nothing changed.
+   - Refused: the update failed, nothing changed. A STOP is refused when no transfer is running or
+     when fewer bytes than announced were received.
 5. Reconnect and check the firmware version.
 
 A disconnect aborts the transfer: restart from START.
@@ -41,8 +43,9 @@ A disconnect aborts the transfer: restart from START.
 
 A shorter write is rejected with the ATT error `0x0D` (invalid attribute value length).
 
-With pre-encrypted OTA, the length is the size of the encrypted file. A STOP is then refused when
-the decrypted image is incomplete or fails its authentication.
+Firmware beyond this length aborts the transfer. With pre-encrypted OTA, the length is the size of
+the encrypted file. A STOP is then refused when the decrypted image is incomplete or fails its
+authentication.
 
 ## Command ack (notification on COMMAND, 20 bytes)
 
