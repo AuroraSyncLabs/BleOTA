@@ -376,6 +376,14 @@ write_ota_data:
     }
 #endif
     if (recv_packet == 0xff) {
+        uint8_t sector_crc[SECTOR_END_ID];
+
+        os_mbuf_copydata(om, mbuf_len - SECTOR_END_ID, SECTOR_END_ID, sector_crc);
+        if (crc16_ccitt(fw_buf, (int)fw_buf_offset) != (sector_crc[0] | (sector_crc[1] << 8))) {
+            ESP_LOGE(TAG, "%s: sector %" PRIu32 " CRC error", __func__, cur_sector);
+            ble_ota_sector_resend(om);
+            return ESP_ERR_INVALID_CRC;
+        }
 #ifdef CONFIG_PRE_ENC_OTA
         esp_err_t derr = ble_ota_pre_enc_flush_sector(fw_buf, fw_buf_offset);
         if (derr != ESP_OK) {

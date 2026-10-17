@@ -112,13 +112,18 @@ static int send_command(uint16_t cmd, uint32_t fw_length)
     return write_chr(CMD_CHAR, buf, sizeof(buf));
 }
 
-/* The last packet carries a 2-byte CRC trailer, left at 0: the device does not check it. */
+/* Sectors start at fw[0]: the last packet ends with the CRC16 of fw up to the end of its data. */
 static int send_packet(uint16_t sector, uint8_t packet, const uint8_t *data, uint16_t len)
 {
     uint8_t buf[3 + sizeof(fw) + 2] = {sector & 0xff, sector >> 8, packet};
+    uint16_t crc = crc16_ccitt(fw, data + len - fw);
 
     memcpy(&buf[3], data, len);
-    return write_chr(RECV_FW_CHAR, buf, 3 + len + (packet == LAST_PACKET ? 2 : 0));
+    if (packet != LAST_PACKET)
+        return write_chr(RECV_FW_CHAR, buf, 3 + len);
+    buf[3 + len] = crc & 0xff;
+    buf[4 + len] = crc >> 8;
+    return write_chr(RECV_FW_CHAR, buf, 5 + len);
 }
 
 static uint16_t crc16_ccitt(const uint8_t *buf, size_t len)
@@ -242,6 +247,15 @@ TEST_CASE("out of order packet asks for the sector again", "[ble_ota]")
     TEST_ASSERT_EQUAL_INT(0, send_packet(0, LAST_PACKET, fw + 8, 4));
     TEST_ASSERT_EQUAL_HEX8_ARRAY(fw, rec.sector, sizeof(fw));
     assert_ack(RECV_FW_CHAR, 0, SECTOR_STORED, 0);
+}
+
+TEST_CASE("lost packet before the last one asks for the sector again", "[ble_ota]")
+{
+    send_command(CMD_START, sizeof(fw));
+    send_packet(0, 0, fw, 4);
+    TEST_ASSERT_NOT_EQUAL_INT(0, send_packet(0, LAST_PACKET, fw + 8, 4));
+    TEST_ASSERT_EQUAL_INT(0, rec.sectors);
+    assert_ack(RECV_FW_CHAR, 0, SECTOR_RESEND, 0);
 }
 
 TEST_CASE("sector refused by the application is asked again", "[ble_ota]")

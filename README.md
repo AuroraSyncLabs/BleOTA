@@ -12,6 +12,7 @@ published on the [ESP Component Registry](https://components.espressif.com/compo
 - Start, sector and end callbacks: the application can refuse a transfer, ask for a sector again and
   report whether the image was accepted.
 - Encrypted link required on every characteristic, acks sent as notifications.
+- Sector CRC checked: a lost packet makes the device ask for the sector again.
 - ESP32-S31 support.
 
 ## Quick start

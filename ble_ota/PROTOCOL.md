@@ -63,9 +63,9 @@ A sector is split into packets of at most MTU − 3 bytes:
 | 0–1    | Sector index, from 0 (the last sector may use `0xFFFF`)        |
 | 2      | Packet index in the sector, from 0; `0xFF` for the last packet |
 | 3–     | Firmware data                                                  |
-| last 2 | Last packet only: CRC16 of the sector (not checked)            |
+| last 2 | Last packet only: CRC16 of the sector's firmware data          |
 
-Packets of a sector must arrive in order. A missing or out-of-order packet makes the device ask for the whole sector again.
+Packets of a sector must arrive in order. An out-of-order packet or a wrong sector CRC (e.g. a lost packet) makes the device ask for the whole sector again.
 
 ## Sector ack (notification on RECV_FW, 20 bytes)
 
