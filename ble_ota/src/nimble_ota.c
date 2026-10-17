@@ -101,6 +101,9 @@ static uint32_t ota_recv_len = 0;
 
 esp_ble_ota_callback_funs_t ota_cb_fun_t = {.recv_fw_cb = NULL};
 
+/* Defined by the application. */
+extern SemaphoreHandle_t notify_sem;
+
 esp_ble_ota_notification_check_t ota_notification = {
     .recv_fw_ntf_enable = false,
     .process_bar_ntf_enable = false,
@@ -201,8 +204,6 @@ static void ble_ota_pre_enc_release(void)
  */
 static void ble_ota_abort_transfer(void)
 {
-    extern SemaphoreHandle_t notify_sem;
-
 #ifdef CONFIG_PRE_ENC_OTA
     ble_ota_pre_enc_release();
     pre_enc_failed = true;
@@ -518,12 +519,77 @@ esp_err_t esp_ble_ota_recv_fw_data_callback(
 }
 #endif
 
+/* Sends a command ack (PROTOCOL.md): status 0x00 accepted, 0x01 refused. */
+static void ble_ota_cmd_ack(uint8_t cmd, uint8_t status, esp_ble_ota_char_t ota_char)
+{
+    uint8_t cmd_ack[CMD_ACK_LENGTH] = {0x03, 0x00, cmd, 0x00, status, 0x00};
+    uint16_t crc16 = crc16_ccitt(cmd_ack, 18);
+
+    cmd_ack[18] = crc16 & 0xff;
+    cmd_ack[19] = (crc16 & 0xff00) >> 8;
+    esp_ble_ota_notification_data(connection_handle, attribute_handle, cmd_ack, ota_char);
+}
+
+static void ble_ota_stop_cmd(esp_ble_ota_char_t ota_char)
+{
+    bool was_running = start_ota;
+#ifdef CONFIG_PRE_ENC_OTA
+    esp_err_t stop_err = ESP_FAIL;
+
+    /* Checks the image length and its authentication tag, and frees the
+     * handle whatever the result. */
+    if (!pre_enc_failed && decrypt_handle_cmp != NULL) {
+        stop_err = esp_encrypted_img_decrypt_end(decrypt_handle_cmp);
+        decrypt_handle_cmp = NULL;
+        if (stop_err != ESP_OK)
+            ESP_LOGE(TAG, "encrypted image incomplete or not authentic");
+    }
+    pre_enc_failed = false;
+#else
+    esp_err_t stop_err = ESP_OK;
+
+    if (!was_running || ota_recv_len != ota_total_len) {
+        ESP_LOGE(TAG, "STOP after %" PRIu32 " of %" PRIu32 " bytes", ota_recv_len, ota_total_len);
+        stop_err = ESP_ERR_INVALID_STATE;
+    }
+#endif
+    xSemaphoreTake(notify_sem, portMAX_DELAY);
+    start_ota = false;
+    ota_total_len = 0;
+    xSemaphoreGive(notify_sem);
+
+    ESP_LOGD(TAG, "recv ota stop cmd");
+    sector_sequence_error = false;
+    cur_sector = 0;
+    cur_packet = 0;
+    ota_recv_len = 0;
+    fw_buf_offset = 0;
+    free(fw_buf);
+    fw_buf = NULL;
+
+    if (stop_err != ESP_OK) {
+        /* The application never sees this STOP: drop its transfer. */
+        if (was_running)
+            ble_ota_abort_transfer();
+        ble_ota_cmd_ack(0x02, 0x01, ota_char);
+        return;
+    }
+
+    if (ota_end_cb) {
+        /* The application acks once it has verified the image. */
+        taskENTER_CRITICAL(&end_ack_lock);
+        end_ack_pending = true;
+        end_ack_attr_handle = attribute_handle;
+        taskEXIT_CRITICAL(&end_ack_lock);
+        ota_end_cb();
+        return;
+    }
+    ble_ota_cmd_ack(0x02, 0x00, ota_char);
+}
+
 static int ble_ota_start_write_chr(struct os_mbuf *om)
 {
-    uint8_t cmd_ack[CMD_ACK_LENGTH] = {0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-                                       0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
     uint8_t cmd[CMD_LENGTH];
-    uint16_t crc16;
 
     esp_ble_ota_char_t ota_char = find_ota_char_and_desr_by_handle(attribute_handle);
     if (os_mbuf_copydata(om, 0, CMD_LENGTH, cmd) != 0) {
@@ -576,14 +642,7 @@ static int ble_ota_start_write_chr(struct os_mbuf *om)
             ota_total_len = 0;
             free(fw_buf);
             fw_buf = NULL;
-            cmd_ack[2] = 0x01;
-            cmd_ack[3] = 0x00;
-            cmd_ack[4] = 0x01; /* refused */
-            cmd_ack[5] = 0x00;
-            crc16 = crc16_ccitt(cmd_ack, 18);
-            cmd_ack[18] = crc16 & 0xff;
-            cmd_ack[19] = (crc16 & 0xff00) >> 8;
-            esp_ble_ota_notification_data(connection_handle, attribute_handle, cmd_ack, ota_char);
+            ble_ota_cmd_ack(0x01, 0x01, ota_char);
             return 0;
         }
 
@@ -605,84 +664,9 @@ static int ble_ota_start_write_chr(struct os_mbuf *om)
             ESP_LOGE(TAG, "%s -  malloc fail", __func__);
         else
             memset(fw_buf, 0x0, SECTOR_SIZE);
-        cmd_ack[2] = 0x01;
-        cmd_ack[3] = 0x00;
-        crc16 = crc16_ccitt(cmd_ack, 18);
-        cmd_ack[18] = crc16 & 0xff;
-        cmd_ack[19] = (crc16 & 0xff00) >> 8;
-        esp_ble_ota_notification_data(connection_handle, attribute_handle, cmd_ack, ota_char);
+        ble_ota_cmd_ack(0x01, 0x00, ota_char);
     } else if ((cmd[0] == 0x02) && (cmd[1] == 0x00)) {
-        bool was_running = start_ota;
-#ifdef CONFIG_PRE_ENC_OTA
-        esp_err_t stop_err = ESP_FAIL;
-
-        /* Checks the image length and its authentication tag, and frees the
-         * handle whatever the result. */
-        if (!pre_enc_failed && decrypt_handle_cmp != NULL) {
-            stop_err = esp_encrypted_img_decrypt_end(decrypt_handle_cmp);
-            decrypt_handle_cmp = NULL;
-            if (stop_err != ESP_OK)
-                ESP_LOGE(TAG, "encrypted image incomplete or not authentic");
-        }
-        pre_enc_failed = false;
-#else
-        esp_err_t stop_err = ESP_OK;
-
-        if (!was_running || ota_recv_len != ota_total_len) {
-            ESP_LOGE(
-                TAG, "STOP after %" PRIu32 " of %" PRIu32 " bytes", ota_recv_len, ota_total_len
-            );
-            stop_err = ESP_ERR_INVALID_STATE;
-        }
-#endif
-        extern SemaphoreHandle_t notify_sem;
-        xSemaphoreTake(notify_sem, portMAX_DELAY);
-
-        start_ota = false;
-        ota_total_len = 0;
-
-        xSemaphoreGive(notify_sem);
-
-        ESP_LOGD(TAG, "recv ota stop cmd");
-        sector_sequence_error = false;
-        cur_sector = 0;
-        cur_packet = 0;
-        ota_recv_len = 0;
-        fw_buf_offset = 0;
-        free(fw_buf);
-        fw_buf = NULL;
-
-        if (stop_err != ESP_OK) {
-            /* The application never sees this STOP: drop its transfer. */
-            if (was_running && ota_abort_cb)
-                ota_abort_cb();
-            cmd_ack[2] = 0x02;
-            cmd_ack[3] = 0x00;
-            cmd_ack[4] = 0x01; /* refused */
-            cmd_ack[5] = 0x00;
-            crc16 = crc16_ccitt(cmd_ack, 18);
-            cmd_ack[18] = crc16 & 0xff;
-            cmd_ack[19] = (crc16 & 0xff00) >> 8;
-            esp_ble_ota_notification_data(connection_handle, attribute_handle, cmd_ack, ota_char);
-            return 0;
-        }
-
-        if (ota_end_cb) {
-            /* The application acks once it has verified the image. */
-            taskENTER_CRITICAL(&end_ack_lock);
-            end_ack_pending = true;
-            end_ack_attr_handle = attribute_handle;
-            taskEXIT_CRITICAL(&end_ack_lock);
-            ota_end_cb();
-            return 0;
-        }
-
-        cmd_ack[2] = 0x02;
-        cmd_ack[3] = 0x00;
-        crc16 = crc16_ccitt(cmd_ack, 18);
-        cmd_ack[18] = crc16 & 0xff;
-        cmd_ack[19] = (crc16 & 0xff00) >> 8;
-        esp_ble_ota_notification_data(connection_handle, attribute_handle, cmd_ack, ota_char);
+        ble_ota_stop_cmd(ota_char);
     }
     return 0;
 }
@@ -1003,7 +987,6 @@ void esp_ble_ota_on_disconnect(void)
     bool was_running = start_ota;
 
     if (was_running) {
-        extern SemaphoreHandle_t notify_sem;
         xSemaphoreTake(notify_sem, portMAX_DELAY);
         start_ota = false;
         ota_total_len = 0;
