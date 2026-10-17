@@ -1,5 +1,7 @@
 # AuroraSync BLE OTA Component
 
+[![CI](https://github.com/AuroraSyncLabs/BleOTA/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/AuroraSyncLabs/BleOTA/actions/workflows/ci.yml)
+
 ESP-IDF component to update firmware over BLE. Fork of Espressif's
 [`ble_ota`](https://github.com/espressif/esp-iot-solution/tree/master/components/bluetooth/ble_profiles/esp/ble_ota),
 published on the [ESP Component Registry](https://components.espressif.com/components/aurorasynclabs/ble_ota).
@@ -35,6 +37,20 @@ starts. `esp_ble_ota_gatt_register()` adds it later instead, but needs
 | API reference   | [`ble_ota/include/ble_ota.h`](ble_ota/include/ble_ota.h) |
 | Minimal example | [`ble_ota/test_app/`](ble_ota/test_app/)                 |
 | Changelog       | [`ble_ota/CHANGELOG.md`](ble_ota/CHANGELOG.md)           |
+
+## Tests
+
+CI runs on every pull request: formatting, `idf.py clang-check`, unit tests on QEMU and the `test_app`
+builds. Unit tests live in `ble_ota/test/` and run through `ble_ota/test_apps/` with
+[pytest](https://docs.espressif.com/projects/esp-idf/en/stable/esp32/contribute/esp-idf-tests-with-pytest.html)
+(`install.sh --enable-ci`, plus `idf_tools.py install qemu-riscv32` for QEMU). From `ble_ota/`:
+
+```shell
+# Formatting, pinned version through uv (https://docs.astral.sh/uv/)
+git ls-files '*.c' '*.h' ':!proto-c' | xargs uvx clang-format==23.1.1 --style=file -i
+# QEMU, as in CI
+idf-ci build run -p test_apps -t esp32c3 -m qemu && pytest -m qemu --target esp32c3
+```
 
 ## Maintainer
 
