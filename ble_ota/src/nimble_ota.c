@@ -220,11 +220,10 @@ static void ble_ota_abort_transfer(void)
 }
 
 /* Drop the sector being received and ask the peer to send it again from its first packet. */
-static void ble_ota_sector_resend(const struct os_mbuf *om)
+static void ble_ota_sector_resend(uint16_t recv_sector)
 {
-    uint8_t cmd_ack[CMD_ACK_LENGTH] = {
-        om->om_data[0], om->om_data[1], 0x02, 0x00, cur_sector & 0xff, (cur_sector & 0xff00) >> 8
-    };
+    uint8_t cmd_ack[CMD_ACK_LENGTH] = {recv_sector & 0xff, recv_sector >> 8,          0x02, 0x00,
+                                       cur_sector & 0xff,  (cur_sector & 0xff00) >> 8};
     uint16_t crc16 = crc16_ccitt(cmd_ack, 18);
 
     cmd_ack[18] = crc16 & 0xff;
@@ -243,9 +242,9 @@ static void ble_ota_sector_resend(const struct os_mbuf *om)
 }
 
 /* Drop the transfer and tell the peer to stop sending. */
-static void ble_ota_sector_abort(const struct os_mbuf *om)
+static void ble_ota_sector_abort(uint16_t recv_sector)
 {
-    uint8_t cmd_ack[CMD_ACK_LENGTH] = {om->om_data[0], om->om_data[1], 0x03, 0x00};
+    uint8_t cmd_ack[CMD_ACK_LENGTH] = {recv_sector & 0xff, recv_sector >> 8, 0x03, 0x00};
     uint16_t crc16 = crc16_ccitt(cmd_ack, 18);
 
     cmd_ack[18] = crc16 & 0xff;
@@ -279,18 +278,22 @@ static esp_err_t esp_ble_ota_write_chr(struct os_mbuf *om)
     uint8_t cmd_ack[CMD_ACK_LENGTH] = {0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
                                        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
     uint16_t crc16;
-    unsigned int recv_sector = (unsigned int)(om->om_data[0] + (om->om_data[1] * 256));
-    uint8_t recv_packet = om->om_data[2];
+    /* The value can start in any mbuf of the chain: never read om_data directly. */
+    uint8_t hdr[3];
+
+    os_mbuf_copydata(om, 0, sizeof(hdr), hdr);
+    uint16_t recv_sector = hdr[0] | (hdr[1] << 8);
+    uint8_t recv_packet = hdr[2];
 
     if (recv_sector != cur_sector) {
-        if ((om->om_data[0] == 0xff) && (om->om_data[1] == 0xff)) {
+        if (recv_sector == 0xffff) {
             ESP_LOGD(TAG, "Last sector");
         } else {
             ESP_LOGE(
                 TAG, "%s - sector index error, cur: %" PRIu32 ", recv: %u", __func__, cur_sector,
                 recv_sector
             );
-            ble_ota_sector_resend(om);
+            ble_ota_sector_resend(recv_sector);
             return ESP_ERR_INVALID_STATE;
         }
     }
@@ -304,7 +307,7 @@ static esp_err_t esp_ble_ota_write_chr(struct os_mbuf *om)
                     "sector %" PRIu32,
                     __func__, cur_sector
                 );
-                ble_ota_sector_resend(om);
+                ble_ota_sector_resend(recv_sector);
                 return ESP_ERR_INVALID_STATE;
             }
             ESP_LOGD(TAG, "last packet");
@@ -407,7 +410,7 @@ write_ota_data:
         os_mbuf_copydata(om, mbuf_len - SECTOR_END_ID, SECTOR_END_ID, sector_crc);
         if (crc16_ccitt(fw_buf, (int)fw_buf_offset) != (sector_crc[0] | (sector_crc[1] << 8))) {
             ESP_LOGE(TAG, "%s: sector %" PRIu32 " CRC error", __func__, cur_sector);
-            ble_ota_sector_resend(om);
+            ble_ota_sector_resend(recv_sector);
             return ESP_ERR_INVALID_CRC;
         }
 #ifdef CONFIG_PRE_ENC_OTA
@@ -418,7 +421,7 @@ write_ota_data:
                 TAG, "%s: sector %" PRIu32 " not decrypted or not stored (%s), aborting", __func__,
                 cur_sector, esp_err_to_name(derr)
             );
-            ble_ota_sector_abort(om);
+            ble_ota_sector_abort(recv_sector);
             return derr;
         }
 #else
@@ -427,7 +430,7 @@ write_ota_data:
                 TAG, "%s: sector %" PRIu32 " beyond the announced length, aborting", __func__,
                 cur_sector
             );
-            ble_ota_sector_abort(om);
+            ble_ota_sector_abort(recv_sector);
             return ESP_ERR_INVALID_SIZE;
         }
         esp_err_t ferr = esp_ble_ota_recv_fw_handler(
@@ -439,7 +442,7 @@ write_ota_data:
                 TAG, "%s: sector %" PRIu32 " refused: %s", __func__, cur_sector,
                 esp_err_to_name(ferr)
             );
-            ble_ota_sector_resend(om);
+            ble_ota_sector_resend(recv_sector);
             return ferr;
         }
         ota_recv_len += fw_buf_offset;
@@ -459,8 +462,8 @@ sector_end:
     memset(fw_buf, 0x0, ota_block_size);
     sector_sequence_error = false;
 
-    cmd_ack[0] = om->om_data[0];
-    cmd_ack[1] = om->om_data[1];
+    cmd_ack[0] = recv_sector & 0xff;
+    cmd_ack[1] = recv_sector >> 8;
     cmd_ack[2] = 0x00; // success
     cmd_ack[3] = 0x00;
     crc16 = crc16_ccitt(cmd_ack, 18);
