@@ -653,7 +653,6 @@ static void ble_ota_start_write_chr(struct os_mbuf *om)
         cmd_ack[19] = (crc16 & 0xff00) >> 8;
         esp_ble_ota_notification_data(connection_handle, attribute_handle, cmd_ack, ota_char);
     } else if ((om->om_data[0] == 0x02) && (om->om_data[1] == 0x00)) {
-        printf("\nCMD_CHAR -> 0 : %d, 1 : %d", om->om_data[0], om->om_data[1]);
 #ifdef CONFIG_PRE_ENC_OTA
         bool was_running = start_ota;
         esp_err_t decrypt_err = ESP_FAIL;
