@@ -1,0 +1,3 @@
+dependencies:
+  ble_ota:
+    override_path: ../..
