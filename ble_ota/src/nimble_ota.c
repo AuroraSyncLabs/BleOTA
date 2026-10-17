@@ -593,6 +593,10 @@ static int ble_ota_start_write_chr(struct os_mbuf *om)
             (cmd[2]) + (cmd[3] * 256) + (cmd[4] * 256 * 256) + (cmd[5] * 256 * 256 * 256);
         esp_err_t start_err = ESP_OK;
 
+        /* The application releases the transfer this START supersedes. */
+        if (start_ota)
+            ble_ota_abort_transfer();
+
 #ifdef CONFIG_PRE_ENC_OTA
         pre_enc_failed = false;
         if (fw_length <= ENC_HEADER) {
