@@ -23,7 +23,7 @@ jobs:
     env:
       IDF_TOOLCHAIN: clang
       # Findings on main when the job was added. Lower it when you fix some.
-      MAX_WARNINGS: 7
+      MAX_WARNINGS: 6
     steps:
       - uses: actions/checkout@v5
       - name: Run idf.py clang-check
