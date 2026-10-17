@@ -61,6 +61,7 @@ static bool pre_enc_failed = false;
 
 #define BUF_LENGTH 4098
 #define OTA_IDX_NB 4
+#define CMD_LENGTH 20
 #define CMD_ACK_LENGTH 20
 
 #define character_declaration_uuid BLE_ATT_UUID_CHARACTERISTIC
@@ -569,16 +570,21 @@ esp_err_t esp_ble_ota_write(uint8_t *file, size_t length)
  * OTA without protocomm api's
  *----------------------------------------------------*/
 
-static void ble_ota_start_write_chr(struct os_mbuf *om)
+static int ble_ota_start_write_chr(struct os_mbuf *om)
 {
     uint8_t cmd_ack[CMD_ACK_LENGTH] = {0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
                                        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+    uint8_t cmd[CMD_LENGTH];
     uint16_t crc16;
 
     esp_ble_ota_char_t ota_char = find_ota_char_and_desr_by_handle(attribute_handle);
-    if ((om->om_data[0] == 0x01) && (om->om_data[1] == 0x00)) {
-        uint32_t fw_length = (om->om_data[2]) + (om->om_data[3] * 256) +
-                             (om->om_data[4] * 256 * 256) + (om->om_data[5] * 256 * 256 * 256);
+    if (os_mbuf_copydata(om, 0, CMD_LENGTH, cmd) != 0) {
+        ESP_LOGE(TAG, "%s: command too short (%u)", __func__, os_mbuf_len(om));
+        return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+    }
+    if ((cmd[0] == 0x01) && (cmd[1] == 0x00)) {
+        uint32_t fw_length =
+            (cmd[2]) + (cmd[3] * 256) + (cmd[4] * 256 * 256) + (cmd[5] * 256 * 256 * 256);
         esp_err_t start_err = ESP_OK;
 
 #ifdef CONFIG_PRE_ENC_OTA
@@ -626,7 +632,7 @@ static void ble_ota_start_write_chr(struct os_mbuf *om)
             cmd_ack[18] = crc16 & 0xff;
             cmd_ack[19] = (crc16 & 0xff00) >> 8;
             esp_ble_ota_notification_data(connection_handle, attribute_handle, cmd_ack, ota_char);
-            return;
+            return 0;
         }
 
         start_ota = true;
@@ -652,7 +658,7 @@ static void ble_ota_start_write_chr(struct os_mbuf *om)
         cmd_ack[18] = crc16 & 0xff;
         cmd_ack[19] = (crc16 & 0xff00) >> 8;
         esp_ble_ota_notification_data(connection_handle, attribute_handle, cmd_ack, ota_char);
-    } else if ((om->om_data[0] == 0x02) && (om->om_data[1] == 0x00)) {
+    } else if ((cmd[0] == 0x02) && (cmd[1] == 0x00)) {
 #ifdef CONFIG_PRE_ENC_OTA
         bool was_running = start_ota;
         esp_err_t decrypt_err = ESP_FAIL;
@@ -696,7 +702,7 @@ static void ble_ota_start_write_chr(struct os_mbuf *om)
             cmd_ack[18] = crc16 & 0xff;
             cmd_ack[19] = (crc16 & 0xff00) >> 8;
             esp_ble_ota_notification_data(connection_handle, attribute_handle, cmd_ack, ota_char);
-            return;
+            return 0;
         }
 #endif
 
@@ -707,7 +713,7 @@ static void ble_ota_start_write_chr(struct os_mbuf *om)
             end_ack_attr_handle = attribute_handle;
             taskEXIT_CRITICAL(&end_ack_lock);
             ota_end_cb();
-            return;
+            return 0;
         }
 
         cmd_ack[2] = 0x02;
@@ -717,6 +723,7 @@ static void ble_ota_start_write_chr(struct os_mbuf *om)
         cmd_ack[19] = (crc16 & 0xff00) >> 8;
         esp_ble_ota_notification_data(connection_handle, attribute_handle, cmd_ack, ota_char);
     }
+    return 0;
 }
 
 #if !CONFIG_BLE_OTA_EXTERNAL_HOST
@@ -789,7 +796,7 @@ static int ble_ota_gatt_handler(
                 ESP_LOGE(TAG, "%s -  don't receive the start cmd", __func__);
             }
         } else if (ota_char == CMD_CHAR) {
-            ble_ota_start_write_chr(ctxt->om);
+            return ble_ota_start_write_chr(ctxt->om);
         }
         break;
 

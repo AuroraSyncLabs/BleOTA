@@ -39,6 +39,8 @@ A disconnect aborts the transfer: restart from START.
 | 6–17   | `0x00`                                  |
 | 18–19  | CRC16 of bytes 0–17 (not checked)       |
 
+A shorter write is rejected with the ATT error `0x0D` (invalid attribute value length).
+
 With pre-encrypted OTA, the length is the size of the encrypted file. A STOP is then refused when
 the decrypted image is incomplete or fails its authentication.
 

@@ -192,6 +192,17 @@ TEST_CASE("START refused by the application blocks the firmware data", "[ble_ota
     TEST_ASSERT_EQUAL_INT(1, rec.acks);
 }
 
+TEST_CASE("short command is rejected", "[ble_ota]")
+{
+    static const uint8_t start[] = {CMD_START, 0x00};
+
+    TEST_ASSERT_EQUAL_INT(
+        BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN, write_chr(CMD_CHAR, start, sizeof(start))
+    );
+    TEST_ASSERT_EQUAL_INT(0, rec.acks);
+    TEST_ASSERT_EQUAL_UINT32(0, esp_ble_ota_get_fw_length());
+}
+
 TEST_CASE("sectors are given to the application and acked", "[ble_ota]")
 {
     send_command(CMD_START, sizeof(fw) + 4);
