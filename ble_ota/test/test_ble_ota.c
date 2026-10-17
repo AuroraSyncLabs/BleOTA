@@ -204,6 +204,14 @@ TEST_CASE("START refused by the application blocks the firmware data", "[ble_ota
     TEST_ASSERT_EQUAL_INT(1, rec.acks);
 }
 
+TEST_CASE("START during a transfer aborts the previous one", "[ble_ota][security]")
+{
+    send_command(CMD_START, sizeof(fw));
+    send_command(CMD_START, sizeof(fw));
+    TEST_ASSERT_EQUAL_INT(1, rec.aborts);
+    assert_ack(CMD_CHAR, CMD_ACK, CMD_START, ACK_ACCEPTED);
+}
+
 TEST_CASE("short command is rejected", "[ble_ota]")
 {
     static const uint8_t start[] = {CMD_START, 0x00};
