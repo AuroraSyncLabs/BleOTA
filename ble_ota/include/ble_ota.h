@@ -97,65 +97,6 @@ typedef struct esp_ble_ota_notification_check {
     bool customer_ntf_enable;    /*!< BLE OTA customer data characteristic */
 } esp_ble_ota_notification_check_t;
 
-#if CONFIG_BT_BLUEDROID_ENABLED
-/// BLE OTA characteristics
-typedef enum {
-    RECV_FW_CHAR,
-    RECV_FW_CHAR_CCC,
-
-    OTA_STATUS_CHAR,
-    OTA_STATUS_CHAR_CCC,
-
-    CMD_CHAR,
-    CMD_CHAR_CCC,
-
-    CUS_CHAR,
-    CUS_CHAR_CCC,
-
-    INVALID_CHAR,
-} esp_ble_ota_char_t;
-
-/// BLE DIS characteristics
-typedef enum {
-    DIS_SVC_IDX,
-
-    DIS_MODEL_CHAR_IDX,
-    DIS_MODEL_CHAR_VAL_IDX,
-
-    DIS_SN_CHAR_IDX,
-    DIS_SN_CHAR_VAL_IDX,
-
-    DIS_FW_CHAR_IDX,
-    DIS_FW_CHAR_VAL_IDX,
-
-    DIS_IDX_NB,
-} esp_ble_dis_service_index_t;
-
-/// BLE OTA characteristics Index
-typedef enum {
-    OTA_SVC_IDX,
-
-    RECV_FW_CHAR_IDX,
-    RECV_FW_CHAR_VAL_IDX,
-    RECV_FW_CHAR_NTF_CFG,
-
-    OTA_STATUS_CHAR_IDX,
-    OTA_STATUS_CHAR_VAL_IDX,
-    OTA_STATUS_NTF_CFG,
-
-    CMD_CHAR_IDX,
-    CMD_CHAR_VAL_IDX,
-    CMD_CHAR_NTF_CFG,
-
-    CUS_CHAR_IDX,
-    CUS_CHAR_VAL_IDX,
-    CUS_CHAR_NTF_CFG,
-
-    OTA_IDX_NB,
-} esp_ble_ota_service_index_t;
-
-#else
-
 typedef enum {
     RECV_FW_CHAR,
     OTA_STATUS_CHAR,
@@ -338,7 +279,6 @@ esp_err_t esp_ble_ota_set_decrypt_cfg(const esp_decrypt_cfg_t *cfg);
 esp_err_t esp_ble_ota_end_ack(esp_err_t result);
 #endif /* !CONFIG_OTA_WITH_PROTOCOMM */
 
-#endif
 #if !CONFIG_BLE_OTA_EXTERNAL_HOST
 /**
  * @brief           This function is called to Initialization ble ota host
