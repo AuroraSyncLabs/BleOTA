@@ -1,11 +1,5 @@
 set(srcs "")
-set(priv_include_dirs "")
-set(requires bt nvs_flash protocomm esp_netif protobuf-c)
-if("${IDF_VERSION_MAJOR}.${IDF_VERSION_MINOR}" VERSION_GREATER_EQUAL "6.0")
-    set(priv_requires cjson esp_timer)
-else()
-    set(priv_requires json esp_timer)
-endif()
+set(requires bt nvs_flash)
 
 if(CONFIG_BT_BLUEDROID_ENABLED)
     message(FATAL_ERROR "ble_ota supports NimBLE only: use espressif/ble_ota with Bluedroid")
@@ -18,23 +12,11 @@ if(CONFIG_BT_NIMBLE_ENABLED)
     if(CONFIG_PRE_ENC_OTA)
         list(APPEND requires espressif__esp_encrypted_img)
     endif()
-
-    if(CONFIG_OTA_WITH_PROTOCOMM)
-        list(APPEND srcs
-            "src/scheme_ble.c"
-            "src/manager.c"
-            "src/handlers.c"
-            "src/decrypt_ota_file.c"
-            "proto-c/ota_send_file.pb-c.c")
-        list(APPEND priv_include_dirs proto-c "${IDF_PATH}/components/protocomm/proto-c")
-    endif()
 endif()
 
 idf_component_register(SRCS "${srcs}"
                        INCLUDE_DIRS "include"
-                       PRIV_INCLUDE_DIRS "${priv_include_dirs}"
-                       REQUIRES "${requires}"
-                       PRIV_REQUIRES "${priv_requires}")
+                       REQUIRES "${requires}")
 
 include(package_manager)
 cu_pkg_define_version(${CMAKE_CURRENT_LIST_DIR})
