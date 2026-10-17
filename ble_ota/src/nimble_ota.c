@@ -59,7 +59,8 @@ static bool decrypt_cfg_set = false;
 static bool pre_enc_failed = false;
 #endif
 
-#define BUF_LENGTH 4098
+/* Largest sector (PROTOCOL.md): the sector CRC is not stored. */
+#define SECTOR_SIZE 4096
 #define OTA_IDX_NB 4
 #define CMD_LENGTH 20
 #define CMD_ACK_LENGTH 20
@@ -97,7 +98,7 @@ static uint32_t fw_buf_offset = 0;
 static uint32_t ota_total_len = 0;
 /* Firmware bytes given to the application in the current transfer. */
 static uint32_t ota_recv_len = 0;
-static uint32_t ota_block_size = BUF_LENGTH;
+static uint32_t ota_block_size = SECTOR_SIZE;
 
 esp_ble_ota_callback_funs_t ota_cb_fun_t = {.recv_fw_cb = NULL};
 
@@ -384,7 +385,7 @@ write_ota_data:
         if (fw_buf == NULL)
             return ESP_ERR_INVALID_STATE;
         if (fw_buf_offset + copy_len > ota_block_size) {
-            ESP_LOGE(TAG, "%s: sector ciphertext overflow", __func__);
+            ESP_LOGE(TAG, "%s: sector longer than %" PRIu32 " bytes", __func__, ota_block_size);
             fw_buf_offset = 0;
             memset(fw_buf, 0x0, ota_block_size);
             return ESP_ERR_INVALID_SIZE;
@@ -433,9 +434,7 @@ write_ota_data:
             ble_ota_sector_abort(recv_sector);
             return ESP_ERR_INVALID_SIZE;
         }
-        esp_err_t ferr = esp_ble_ota_recv_fw_handler(
-            fw_buf, fw_buf_offset < ota_block_size ? fw_buf_offset : 4096
-        );
+        esp_err_t ferr = esp_ble_ota_recv_fw_handler(fw_buf, fw_buf_offset);
         if (ferr != ESP_OK) {
             /* The application could not store the sector: ask for it again. */
             ESP_LOGW(

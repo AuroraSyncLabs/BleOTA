@@ -19,7 +19,8 @@ Enable notifications (CCCD `0x0001`) on RECV_FW and COMMAND before starting.
 
 1. Connect, bond, request MTU 517, subscribe.
 2. Write START on COMMAND, wait for its ack. Refused: stop.
-3. Send the firmware in 4096-byte sectors (the last one may be shorter). After each sector, wait for its ack:
+3. Send the firmware in 4096-byte sectors (the last one may be shorter, a longer one is rejected). After
+   each sector, wait for its ack:
    - `0x0000`: send the next sector.
    - `0x0002`: resend from the sector given in the ack.
    - `0x0003`: transfer aborted (the sector goes beyond the announced length or, with pre-encrypted
