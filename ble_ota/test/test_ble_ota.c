@@ -112,6 +112,18 @@ static int send_command(uint16_t cmd, uint32_t fw_length)
     return write_chr(CMD_CHAR, buf, sizeof(buf));
 }
 
+static uint16_t crc16_ccitt(const uint8_t *buf, size_t len)
+{
+    uint16_t crc = 0;
+
+    while (len--) {
+        crc ^= *buf++ << 8;
+        for (int i = 0; i < 8; i++)
+            crc = crc & 0x8000 ? (crc << 1) ^ 0x1021 : crc << 1;
+    }
+    return crc;
+}
+
 /* Sectors start at fw[0]: the last packet ends with the CRC16 of fw up to the end of its data. */
 static int send_packet(uint16_t sector, uint8_t packet, const uint8_t *data, uint16_t len)
 {
@@ -124,18 +136,6 @@ static int send_packet(uint16_t sector, uint8_t packet, const uint8_t *data, uin
     buf[3 + len] = crc & 0xff;
     buf[4 + len] = crc >> 8;
     return write_chr(RECV_FW_CHAR, buf, 5 + len);
-}
-
-static uint16_t crc16_ccitt(const uint8_t *buf, size_t len)
-{
-    uint16_t crc = 0;
-
-    while (len--) {
-        crc ^= *buf++ << 8;
-        for (int i = 0; i < 8; i++)
-            crc = crc & 0x8000 ? (crc << 1) ^ 0x1021 : crc << 1;
-    }
-    return crc;
 }
 
 /* Checks the last notification: three little-endian fields, zeros, then the CRC16. */
