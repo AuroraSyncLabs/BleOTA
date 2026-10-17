@@ -1,0 +1,17 @@
+# Checks run by `idf.py clang-check` in CI, based on the ESP-IDF default set.
+Checks: >
+  -*,
+  clang-analyzer-*,
+  bugprone-*,
+  performance-*,
+  readability-*,
+  -bugprone-macro-parentheses,
+  -bugprone-easily-swappable-parameters,
+  -readability-magic-numbers,
+  -readability-avoid-const-params-in-decls,
+  -readability-identifier-length,
+  -readability-braces-around-statements,
+  -clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling
+CheckOptions:
+  # ESP_LOGx macros expand into nested level checks and inflate the score.
+  readability-function-cognitive-complexity.IgnoreMacros: true
