@@ -25,6 +25,7 @@
 #define ACK_REFUSED 0x0001
 #define SECTOR_STORED 0x0000
 #define SECTOR_RESEND 0x0002
+#define SECTOR_ABORTED 0x0003
 
 /* Required by the component (declared extern in src/). */
 SemaphoreHandle_t notify_sem;
@@ -274,6 +275,7 @@ TEST_CASE("sector refused by the application is asked again", "[ble_ota]")
 TEST_CASE("STOP is acked at once without an end callback", "[ble_ota]")
 {
     send_command(CMD_START, sizeof(fw));
+    send_packet(0, LAST_PACKET, fw, sizeof(fw));
     TEST_ASSERT_EQUAL_INT(0, send_command(CMD_STOP, 0));
     TEST_ASSERT_EQUAL_UINT32(0, esp_ble_ota_get_fw_length());
     assert_ack(CMD_CHAR, CMD_ACK, CMD_STOP, ACK_ACCEPTED);
@@ -284,13 +286,42 @@ TEST_CASE("STOP ack waits for the application verdict", "[ble_ota]")
 {
     esp_ble_ota_set_end_cb(on_end);
     send_command(CMD_START, sizeof(fw));
+    send_packet(0, LAST_PACKET, fw, sizeof(fw));
     send_command(CMD_STOP, 0);
     TEST_ASSERT_EQUAL_INT(1, rec.ends);
-    TEST_ASSERT_EQUAL_INT(1, rec.acks);
+    TEST_ASSERT_EQUAL_INT(2, rec.acks);
 
     TEST_ASSERT_EQUAL_INT(ESP_OK, esp_ble_ota_end_ack(ESP_FAIL));
     assert_ack(CMD_CHAR, CMD_ACK, CMD_STOP, ACK_REFUSED);
     TEST_ASSERT_EQUAL_INT(ESP_ERR_INVALID_STATE, esp_ble_ota_end_ack(ESP_OK));
+}
+
+TEST_CASE("STOP without a transfer is refused", "[ble_ota][security]")
+{
+    esp_ble_ota_set_end_cb(on_end);
+    send_command(CMD_STOP, 0);
+    TEST_ASSERT_EQUAL_INT(0, rec.ends);
+    assert_ack(CMD_CHAR, CMD_ACK, CMD_STOP, ACK_REFUSED);
+}
+
+TEST_CASE("STOP before the whole firmware is received is refused", "[ble_ota][security]")
+{
+    esp_ble_ota_set_end_cb(on_end);
+    send_command(CMD_START, 2 * sizeof(fw));
+    send_packet(0, LAST_PACKET, fw, sizeof(fw));
+    send_command(CMD_STOP, 0);
+    TEST_ASSERT_EQUAL_INT(0, rec.ends);
+    TEST_ASSERT_EQUAL_INT(1, rec.aborts);
+    assert_ack(CMD_CHAR, CMD_ACK, CMD_STOP, ACK_REFUSED);
+}
+
+TEST_CASE("firmware beyond the announced length aborts the transfer", "[ble_ota][security]")
+{
+    send_command(CMD_START, 4);
+    TEST_ASSERT_NOT_EQUAL_INT(0, send_packet(0, LAST_PACKET, fw, sizeof(fw)));
+    TEST_ASSERT_EQUAL_INT(0, rec.sectors);
+    TEST_ASSERT_EQUAL_INT(1, rec.aborts);
+    assert_ack(RECV_FW_CHAR, 0, SECTOR_ABORTED, 0);
 }
 
 TEST_CASE("disconnect during a transfer aborts it", "[ble_ota]")
