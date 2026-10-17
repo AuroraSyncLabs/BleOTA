@@ -95,6 +95,8 @@ static uint8_t *fw_buf = NULL;
 static uint32_t fw_buf_offset = 0;
 
 static uint32_t ota_total_len = 0;
+/* Firmware bytes given to the application in the current transfer. */
+static uint32_t ota_recv_len = 0;
 static uint32_t ota_block_size = BUF_LENGTH;
 
 esp_ble_ota_callback_funs_t ota_cb_fun_t = {.recv_fw_cb = NULL};
@@ -193,17 +195,20 @@ static void ble_ota_pre_enc_release(void)
     }
 }
 
+#endif
+
 /**
- * Drop the transfer after a sector failed to decrypt or was refused by the
- * application: the AES-GCM state already advanced, so the sector cannot be
- * sent again.
+ * Drop the transfer in progress: its STOP is refused. Under CONFIG_PRE_ENC_OTA
+ * the AES-GCM state already advanced, so the sector cannot be sent again.
  */
-static void ble_ota_pre_enc_abort_transfer(void)
+static void ble_ota_abort_transfer(void)
 {
     extern SemaphoreHandle_t notify_sem;
 
+#ifdef CONFIG_PRE_ENC_OTA
     ble_ota_pre_enc_release();
     pre_enc_failed = true;
+#endif
     xSemaphoreTake(notify_sem, portMAX_DELAY);
     start_ota = false;
     ota_total_len = 0;
@@ -213,7 +218,6 @@ static void ble_ota_pre_enc_abort_transfer(void)
         ota_abort_cb();
 #endif
 }
-#endif
 
 /* Drop the sector being received and ask the peer to send it again from its first packet. */
 static void ble_ota_sector_resend(const struct os_mbuf *om)
@@ -230,6 +234,28 @@ static void ble_ota_sector_resend(const struct os_mbuf *om)
     if (fw_buf)
         memset(fw_buf, 0x0, ota_block_size);
     sector_sequence_error = false;
+#ifndef CONFIG_OTA_WITH_PROTOCOMM
+    esp_ble_ota_notification_data(
+        connection_handle, attribute_handle, cmd_ack,
+        find_ota_char_and_desr_by_handle(attribute_handle)
+    );
+#endif
+}
+
+/* Drop the transfer and tell the peer to stop sending. */
+static void ble_ota_sector_abort(const struct os_mbuf *om)
+{
+    uint8_t cmd_ack[CMD_ACK_LENGTH] = {om->om_data[0], om->om_data[1], 0x03, 0x00};
+    uint16_t crc16 = crc16_ccitt(cmd_ack, 18);
+
+    cmd_ack[18] = crc16 & 0xff;
+    cmd_ack[19] = (crc16 & 0xff00) >> 8;
+    cur_packet = 0;
+    fw_buf_offset = 0;
+    if (fw_buf)
+        memset(fw_buf, 0x0, ota_block_size);
+    sector_sequence_error = false;
+    ble_ota_abort_transfer();
 #ifndef CONFIG_OTA_WITH_PROTOCOMM
     esp_ble_ota_notification_data(
         connection_handle, attribute_handle, cmd_ack,
@@ -392,24 +418,18 @@ write_ota_data:
                 TAG, "%s: sector %" PRIu32 " not decrypted or not stored (%s), aborting", __func__,
                 cur_sector, esp_err_to_name(derr)
             );
-            fw_buf_offset = 0;
-            memset(fw_buf, 0x0, ota_block_size);
-            cur_packet = 0;
-            sector_sequence_error = false;
-            ble_ota_pre_enc_abort_transfer();
-#ifndef CONFIG_OTA_WITH_PROTOCOMM
-            cmd_ack[0] = om->om_data[0];
-            cmd_ack[1] = om->om_data[1];
-            cmd_ack[2] = 0x03; /* aborted */
-            cmd_ack[3] = 0x00;
-            crc16 = crc16_ccitt(cmd_ack, 18);
-            cmd_ack[18] = crc16 & 0xff;
-            cmd_ack[19] = (crc16 & 0xff00) >> 8;
-            esp_ble_ota_notification_data(connection_handle, attribute_handle, cmd_ack, ota_char);
-#endif
+            ble_ota_sector_abort(om);
             return derr;
         }
 #else
+        if ((uint64_t)ota_recv_len + fw_buf_offset > ota_total_len) {
+            ESP_LOGE(
+                TAG, "%s: sector %" PRIu32 " beyond the announced length, aborting", __func__,
+                cur_sector
+            );
+            ble_ota_sector_abort(om);
+            return ESP_ERR_INVALID_SIZE;
+        }
         esp_err_t ferr = esp_ble_ota_recv_fw_handler(
             fw_buf, fw_buf_offset < ota_block_size ? fw_buf_offset : 4096
         );
@@ -422,6 +442,7 @@ write_ota_data:
             ble_ota_sector_resend(om);
             return ferr;
         }
+        ota_recv_len += fw_buf_offset;
 #endif
         cur_packet = 0;
         cur_sector++;
@@ -518,6 +539,7 @@ esp_err_t esp_ble_ota_recv_fw_data_callback(
 void esp_ble_ota_set_sizes(size_t file_size, size_t block_size)
 {
     ota_total_len = file_size;
+    ota_recv_len = 0;
     ota_block_size = block_size;
 }
 
@@ -530,6 +552,7 @@ void esp_ble_ota_finish(void)
     sector_sequence_error = false;
     cur_sector = 0;
     cur_packet = 0;
+    ota_recv_len = 0;
     fw_buf_offset = 0;
     free(fw_buf);
     fw_buf = NULL;
@@ -621,6 +644,7 @@ static int ble_ota_start_write_chr(struct os_mbuf *om)
         sector_sequence_error = false;
         cur_sector = 0;
         cur_packet = 0;
+        ota_recv_len = 0;
         fw_buf_offset = 0;
 
         if (fw_buf != NULL) {
@@ -639,19 +663,28 @@ static int ble_ota_start_write_chr(struct os_mbuf *om)
         cmd_ack[19] = (crc16 & 0xff00) >> 8;
         esp_ble_ota_notification_data(connection_handle, attribute_handle, cmd_ack, ota_char);
     } else if ((cmd[0] == 0x02) && (cmd[1] == 0x00)) {
-#ifdef CONFIG_PRE_ENC_OTA
         bool was_running = start_ota;
-        esp_err_t decrypt_err = ESP_FAIL;
+#ifdef CONFIG_PRE_ENC_OTA
+        esp_err_t stop_err = ESP_FAIL;
 
         /* Checks the image length and its authentication tag, and frees the
          * handle whatever the result. */
         if (!pre_enc_failed && decrypt_handle_cmp != NULL) {
-            decrypt_err = esp_encrypted_img_decrypt_end(decrypt_handle_cmp);
+            stop_err = esp_encrypted_img_decrypt_end(decrypt_handle_cmp);
             decrypt_handle_cmp = NULL;
-            if (decrypt_err != ESP_OK)
+            if (stop_err != ESP_OK)
                 ESP_LOGE(TAG, "encrypted image incomplete or not authentic");
         }
         pre_enc_failed = false;
+#else
+        esp_err_t stop_err = ESP_OK;
+
+        if (!was_running || ota_recv_len != ota_total_len) {
+            ESP_LOGE(
+                TAG, "STOP after %" PRIu32 " of %" PRIu32 " bytes", ota_recv_len, ota_total_len
+            );
+            stop_err = ESP_ERR_INVALID_STATE;
+        }
 #endif
         extern SemaphoreHandle_t notify_sem;
         xSemaphoreTake(notify_sem, portMAX_DELAY);
@@ -665,12 +698,12 @@ static int ble_ota_start_write_chr(struct os_mbuf *om)
         sector_sequence_error = false;
         cur_sector = 0;
         cur_packet = 0;
+        ota_recv_len = 0;
         fw_buf_offset = 0;
         free(fw_buf);
         fw_buf = NULL;
 
-#ifdef CONFIG_PRE_ENC_OTA
-        if (decrypt_err != ESP_OK) {
+        if (stop_err != ESP_OK) {
             /* The application never sees this STOP: drop its transfer. */
             if (was_running && ota_abort_cb)
                 ota_abort_cb();
@@ -684,7 +717,6 @@ static int ble_ota_start_write_chr(struct os_mbuf *om)
             esp_ble_ota_notification_data(connection_handle, attribute_handle, cmd_ack, ota_char);
             return 0;
         }
-#endif
 
         if (ota_end_cb) {
             /* The application acks once it has verified the image. */
@@ -1042,6 +1074,7 @@ void esp_ble_ota_on_disconnect(void)
     sector_sequence_error = false;
     cur_sector = 0;
     cur_packet = 0;
+    ota_recv_len = 0;
     fw_buf_offset = 0;
     free(fw_buf);
     fw_buf = NULL;
