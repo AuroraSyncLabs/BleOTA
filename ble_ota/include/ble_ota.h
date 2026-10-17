@@ -34,10 +34,11 @@ typedef void (*esp_ble_ota_recv_fw_cb_t)(uint8_t *buf, uint32_t length);
  *
  * Called from the NimBLE host task when an OTA in progress is dropped, so the
  * application can release its own OTA state (e.g. esp_ota_abort()): the link
- * dropped, the firmware went beyond the announced length, the STOP came
- * before the whole firmware or, under CONFIG_PRE_ENC_OTA, a sector could not
- * be decrypted or stored, or the image failed its authentication at STOP. The
- * decrypt handle is released by the component.
+ * dropped, a new START superseded it, the firmware went beyond the announced
+ * length, the STOP came before the whole firmware or, under
+ * CONFIG_PRE_ENC_OTA, a sector could not be decrypted or stored, or the image
+ * failed its authentication at STOP. The decrypt handle is released by the
+ * component.
  */
 typedef void (*esp_ble_ota_abort_cb_t)(void);
 
