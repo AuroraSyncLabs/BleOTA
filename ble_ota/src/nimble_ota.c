@@ -98,11 +98,9 @@ static uint32_t fw_buf_offset = 0;
 static uint32_t ota_total_len = 0;
 /* Firmware bytes given to the application in the current transfer. */
 static uint32_t ota_recv_len = 0;
-static uint32_t ota_block_size = SECTOR_SIZE;
 
 esp_ble_ota_callback_funs_t ota_cb_fun_t = {.recv_fw_cb = NULL};
 
-#ifndef CONFIG_OTA_WITH_PROTOCOMM
 esp_ble_ota_notification_check_t ota_notification = {
     .recv_fw_ntf_enable = false,
     .process_bar_ntf_enable = false,
@@ -144,7 +142,6 @@ static int esp_ble_ota_notification_data(
     uint8_t cmd_ack[],
     esp_ble_ota_char_t ota_char
 );
-#endif
 
 /*----------------------------------------------------
  * Common api's
@@ -214,10 +211,8 @@ static void ble_ota_abort_transfer(void)
     start_ota = false;
     ota_total_len = 0;
     xSemaphoreGive(notify_sem);
-#ifndef CONFIG_OTA_WITH_PROTOCOMM
     if (ota_abort_cb)
         ota_abort_cb();
-#endif
 }
 
 /* Drop the sector being received and ask the peer to send it again from its first packet. */
@@ -232,14 +227,12 @@ static void ble_ota_sector_resend(uint16_t recv_sector)
     cur_packet = 0;
     fw_buf_offset = 0;
     if (fw_buf)
-        memset(fw_buf, 0x0, ota_block_size);
+        memset(fw_buf, 0x0, SECTOR_SIZE);
     sector_sequence_error = false;
-#ifndef CONFIG_OTA_WITH_PROTOCOMM
     esp_ble_ota_notification_data(
         connection_handle, attribute_handle, cmd_ack,
         find_ota_char_and_desr_by_handle(attribute_handle)
     );
-#endif
 }
 
 /* Drop the transfer and tell the peer to stop sending. */
@@ -253,22 +246,18 @@ static void ble_ota_sector_abort(uint16_t recv_sector)
     cur_packet = 0;
     fw_buf_offset = 0;
     if (fw_buf)
-        memset(fw_buf, 0x0, ota_block_size);
+        memset(fw_buf, 0x0, SECTOR_SIZE);
     sector_sequence_error = false;
     ble_ota_abort_transfer();
-#ifndef CONFIG_OTA_WITH_PROTOCOMM
     esp_ble_ota_notification_data(
         connection_handle, attribute_handle, cmd_ack,
         find_ota_char_and_desr_by_handle(attribute_handle)
     );
-#endif
 }
 
 static esp_err_t esp_ble_ota_write_chr(struct os_mbuf *om)
 {
-#ifndef CONFIG_OTA_WITH_PROTOCOMM
     esp_ble_ota_char_t ota_char = find_ota_char_and_desr_by_handle(attribute_handle);
-#endif
 
     uint16_t mbuf_len = os_mbuf_len(om);
     if (mbuf_len < 3) {
@@ -322,7 +311,7 @@ static esp_err_t esp_ble_ota_write_chr(struct os_mbuf *om)
             cur_packet = 0;
             fw_buf_offset = 0;
             if (fw_buf)
-                memset(fw_buf, 0x0, ota_block_size);
+                memset(fw_buf, 0x0, SECTOR_SIZE);
             return ESP_ERR_INVALID_STATE;
         }
     }
@@ -339,7 +328,7 @@ write_ota_data:
                 ESP_LOGE(TAG, "%s: last packet too short", __func__);
                 fw_buf_offset = 0;
                 if (fw_buf)
-                    memset(fw_buf, 0x0, ota_block_size);
+                    memset(fw_buf, 0x0, SECTOR_SIZE);
                 return ESP_ERR_INVALID_SIZE;
             }
             copy_len -= SECTOR_END_ID;
@@ -348,17 +337,17 @@ write_ota_data:
             ESP_LOGW(TAG, "%s: fw_buf not allocated", __func__);
             return ESP_ERR_INVALID_STATE;
         }
-        if (fw_buf_offset + copy_len > ota_block_size) {
+        if (fw_buf_offset + copy_len > SECTOR_SIZE) {
             ESP_LOGE(TAG, "%s: sector ciphertext overflow", __func__);
             fw_buf_offset = 0;
-            memset(fw_buf, 0x0, ota_block_size);
+            memset(fw_buf, 0x0, SECTOR_SIZE);
             return ESP_ERR_INVALID_SIZE;
         }
         if (copy_len > 0) {
             if (os_mbuf_copydata(om, 3, copy_len, fw_buf + fw_buf_offset) != 0) {
                 ESP_LOGE(TAG, "%s: copydata failed", __func__);
                 fw_buf_offset = 0;
-                memset(fw_buf, 0x0, ota_block_size);
+                memset(fw_buf, 0x0, SECTOR_SIZE);
                 return ESP_FAIL;
             }
             fw_buf_offset += copy_len;
@@ -377,24 +366,24 @@ write_ota_data:
                 ESP_LOGE(TAG, "%s: last packet too short", __func__);
                 fw_buf_offset = 0;
                 if (fw_buf)
-                    memset(fw_buf, 0x0, ota_block_size);
+                    memset(fw_buf, 0x0, SECTOR_SIZE);
                 return ESP_ERR_INVALID_SIZE;
             }
             copy_len -= SECTOR_END_ID;
         }
         if (fw_buf == NULL)
             return ESP_ERR_INVALID_STATE;
-        if (fw_buf_offset + copy_len > ota_block_size) {
-            ESP_LOGE(TAG, "%s: sector longer than %" PRIu32 " bytes", __func__, ota_block_size);
+        if (fw_buf_offset + copy_len > SECTOR_SIZE) {
+            ESP_LOGE(TAG, "%s: sector longer than %d bytes", __func__, SECTOR_SIZE);
             fw_buf_offset = 0;
-            memset(fw_buf, 0x0, ota_block_size);
+            memset(fw_buf, 0x0, SECTOR_SIZE);
             return ESP_ERR_INVALID_SIZE;
         }
         if (copy_len > 0) {
             if (os_mbuf_copydata(om, 3, copy_len, fw_buf + fw_buf_offset) != 0) {
                 ESP_LOGE(TAG, "%s: copydata failed", __func__);
                 fw_buf_offset = 0;
-                memset(fw_buf, 0x0, ota_block_size);
+                memset(fw_buf, 0x0, SECTOR_SIZE);
                 return ESP_FAIL;
             }
             fw_buf_offset += copy_len;
@@ -458,7 +447,7 @@ write_ota_data:
 
 sector_end:
     fw_buf_offset = 0;
-    memset(fw_buf, 0x0, ota_block_size);
+    memset(fw_buf, 0x0, SECTOR_SIZE);
     sector_sequence_error = false;
 
     cmd_ack[0] = recv_sector & 0xff;
@@ -469,9 +458,7 @@ sector_end:
     cmd_ack[18] = crc16 & 0xff;
     cmd_ack[19] = (crc16 & 0xff00) >> 8;
     counter = true;
-#ifndef CONFIG_OTA_WITH_PROTOCOMM
     esp_ble_ota_notification_data(connection_handle, attribute_handle, cmd_ack, ota_char);
-#endif
     return ESP_OK;
 }
 
@@ -505,10 +492,8 @@ unsigned int esp_ble_ota_get_fw_length(void)
 
 static esp_err_t esp_ble_ota_recv_fw_handler(uint8_t *buf, uint32_t length)
 {
-#ifndef CONFIG_OTA_WITH_PROTOCOMM
     if (ota_sector_cb)
         return ota_sector_cb(buf, length);
-#endif
     if (ota_cb_fun_t.recv_fw_cb)
         ota_cb_fun_t.recv_fw_cb(buf, length);
 
@@ -532,48 +517,6 @@ esp_err_t esp_ble_ota_recv_fw_data_callback(
     return ESP_OK;
 }
 #endif
-
-/*----------------------------------------------------
- * Protocomm specific api's
- *----------------------------------------------------*/
-
-#ifdef CONFIG_OTA_WITH_PROTOCOMM
-void esp_ble_ota_set_sizes(size_t file_size, size_t block_size)
-{
-    ota_total_len = file_size;
-    ota_recv_len = 0;
-    ota_block_size = block_size;
-}
-
-void esp_ble_ota_finish(void)
-{
-    ESP_LOGI(TAG, "Received OTA end command");
-    start_ota = false;
-    ota_total_len = 0;
-    ota_block_size = 0;
-    sector_sequence_error = false;
-    cur_sector = 0;
-    cur_packet = 0;
-    ota_recv_len = 0;
-    fw_buf_offset = 0;
-    free(fw_buf);
-    fw_buf = NULL;
-}
-
-esp_err_t esp_ble_ota_write(uint8_t *file, size_t length)
-{
-    struct os_mbuf *om = ble_hs_mbuf_from_flat(file, length);
-    if (om == NULL)
-        return ESP_ERR_NO_MEM;
-    esp_err_t err = esp_ble_ota_write_chr(om);
-    os_mbuf_free_chain(om);
-    return err;
-}
-#else
-
-/*----------------------------------------------------
- * OTA without protocomm api's
- *----------------------------------------------------*/
 
 static int ble_ota_start_write_chr(struct os_mbuf *om)
 {
@@ -657,11 +600,11 @@ static int ble_ota_start_write_chr(struct os_mbuf *om)
             free(fw_buf);
             fw_buf = NULL;
         }
-        fw_buf = (uint8_t *)malloc(ota_block_size * sizeof(uint8_t));
+        fw_buf = (uint8_t *)malloc(SECTOR_SIZE * sizeof(uint8_t));
         if (fw_buf == NULL)
             ESP_LOGE(TAG, "%s -  malloc fail", __func__);
         else
-            memset(fw_buf, 0x0, ota_block_size);
+            memset(fw_buf, 0x0, SECTOR_SIZE);
         cmd_ack[2] = 0x01;
         cmd_ack[3] = 0x00;
         crc16 = crc16_ccitt(cmd_ack, 18);
@@ -1497,4 +1440,3 @@ esp_err_t esp_ble_ota_host_init(void)
     return 0;
 }
 #endif /* !CONFIG_BLE_OTA_EXTERNAL_HOST */
-#endif /* !CONFIG_OTA_WITH_PROTOCOMM */

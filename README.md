@@ -48,7 +48,7 @@ builds. Unit tests live in `ble_ota/test/` and run through `ble_ota/test_apps/` 
 
 ```shell
 # Formatting, pinned version through uv (https://docs.astral.sh/uv/)
-git ls-files '*.c' '*.h' ':!proto-c' | xargs uvx clang-format==23.1.1 --style=file -i
+git ls-files '*.c' '*.h' | xargs uvx clang-format==23.1.1 --style=file -i
 # QEMU, as in CI
 idf-ci build run -p test_apps -t esp32c3 -m qemu && pytest -m qemu --target esp32c3
 ```

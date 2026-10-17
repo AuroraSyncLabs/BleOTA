@@ -1,9 +1,5 @@
 dependencies:
   cmake_utilities: 0.*
-  espressif/cjson:
-    rules:
-    - if: idf_version >=6.0
-    version: 1.*
   espressif/esp_encrypted_img: ^2.0.1
   idf: '>=4.4'
 description: Espressif defined BLE OTA profile

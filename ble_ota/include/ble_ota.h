@@ -112,26 +112,6 @@ typedef enum {
     CUS_CHAR_VAL_IDX,
 } esp_ble_ota_service_index_t;
 
-/**
- * @brief           This function is called to process write event on
- * characteristics
- *
- * @return          ESP_OK on success, or an error (e.g. decrypt / protocol
- * failure under CONFIG_PRE_ENC_OTA).
- *
- */
-esp_err_t esp_ble_ota_write(uint8_t *file, size_t length);
-
-/**
- * @brief           This function is used to set total file size and each block
- * size
- *
- * @return          void
- *
- */
-void esp_ble_ota_set_sizes(size_t file_size, size_t block_size);
-
-#if !CONFIG_OTA_WITH_PROTOCOMM
 #if CONFIG_BLE_OTA_EXTERNAL_HOST
 struct ble_gatt_svc_def;
 
@@ -277,7 +257,6 @@ esp_err_t esp_ble_ota_set_decrypt_cfg(const esp_decrypt_cfg_t *cfg);
  *                  - ESP_FAIL: the notification could not be sent
  */
 esp_err_t esp_ble_ota_end_ack(esp_err_t result);
-#endif /* !CONFIG_OTA_WITH_PROTOCOMM */
 
 #if !CONFIG_BLE_OTA_EXTERNAL_HOST
 /**
@@ -325,11 +304,6 @@ esp_err_t esp_ble_ota_recv_fw_data_callback(esp_ble_ota_recv_fw_cb_t callback);
  */
 unsigned int esp_ble_ota_get_fw_length(void);
 
-/**
- * @brief           This function is called to indicate OTA end
- *
- */
-void esp_ble_ota_finish(void);
 #ifdef __cplusplus
 }
 #endif
