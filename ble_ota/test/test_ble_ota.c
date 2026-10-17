@@ -92,13 +92,19 @@ static uint16_t chr_handle(esp_ble_ota_char_t chr)
     return *esp_ble_ota_gatt_svcs()->characteristics[chr].val_handle;
 }
 
-static int write_chr(esp_ble_ota_char_t chr, const uint8_t *data, uint16_t len)
+static int write_mbuf(esp_ble_ota_char_t chr, struct os_mbuf *om)
 {
     const struct ble_gatt_chr_def *def = &esp_ble_ota_gatt_svcs()->characteristics[chr];
-    struct os_mbuf om = {.om_data = (uint8_t *)data, .om_len = len};
-    struct ble_gatt_access_ctxt ctxt = {.op = BLE_GATT_ACCESS_OP_WRITE_CHR, .om = &om};
+    struct ble_gatt_access_ctxt ctxt = {.op = BLE_GATT_ACCESS_OP_WRITE_CHR, .om = om};
 
     return def->access_cb(CONN_HANDLE, *def->val_handle, &ctxt, def->arg);
+}
+
+static int write_chr(esp_ble_ota_char_t chr, const uint8_t *data, uint16_t len)
+{
+    struct os_mbuf om = {.om_data = (uint8_t *)data, .om_len = len};
+
+    return write_mbuf(chr, &om);
 }
 
 static int send_command(uint16_t cmd, uint32_t fw_length)
@@ -257,6 +263,26 @@ TEST_CASE("lost packet before the last one asks for the sector again", "[ble_ota
     TEST_ASSERT_NOT_EQUAL_INT(0, send_packet(0, LAST_PACKET, fw + 8, 4));
     TEST_ASSERT_EQUAL_INT(0, rec.sectors);
     assert_ack(RECV_FW_CHAR, 0, SECTOR_RESEND, 0);
+}
+
+TEST_CASE("packet header is read from the whole mbuf chain", "[ble_ota][security]")
+{
+    /* os_mbuf_adj() can leave the emptied ATT header mbuf in front of the value. */
+    uint8_t stale[3] = {0xaa, 0xaa, 0xaa};
+    uint8_t pkt[3 + sizeof(fw) + 2] = {0, 0, LAST_PACKET};
+    uint16_t crc = crc16_ccitt(fw, sizeof(fw));
+    struct os_mbuf value = {.om_data = pkt, .om_len = sizeof(pkt)};
+    struct os_mbuf head = {.om_data = stale, .om_len = 0};
+
+    memcpy(&pkt[3], fw, sizeof(fw));
+    pkt[3 + sizeof(fw)] = crc & 0xff;
+    pkt[4 + sizeof(fw)] = crc >> 8;
+    SLIST_NEXT(&head, om_next) = &value;
+
+    send_command(CMD_START, sizeof(fw));
+    TEST_ASSERT_EQUAL_INT(0, write_mbuf(RECV_FW_CHAR, &head));
+    TEST_ASSERT_EQUAL_INT(1, rec.sectors);
+    assert_ack(RECV_FW_CHAR, 0, SECTOR_STORED, 0);
 }
 
 TEST_CASE("sector refused by the application is asked again", "[ble_ota]")
