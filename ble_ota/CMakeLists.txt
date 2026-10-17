@@ -7,6 +7,10 @@ else()
     set(priv_requires json esp_timer)
 endif()
 
+if(CONFIG_BT_BLUEDROID_ENABLED)
+    message(FATAL_ERROR "ble_ota supports NimBLE only: use espressif/ble_ota with Bluedroid")
+endif()
+
 if(CONFIG_BT_NIMBLE_ENABLED)
     list(APPEND srcs "src/nimble_ota.c")
 
@@ -24,8 +28,6 @@ if(CONFIG_BT_NIMBLE_ENABLED)
             "proto-c/ota_send_file.pb-c.c")
         list(APPEND priv_include_dirs proto-c "${IDF_PATH}/components/protocomm/proto-c")
     endif()
-else()
-    list(APPEND srcs "src/ble_ota.c")
 endif()
 
 idf_component_register(SRCS "${srcs}"
