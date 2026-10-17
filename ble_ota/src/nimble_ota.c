@@ -215,6 +215,29 @@ static void ble_ota_pre_enc_abort_transfer(void)
 }
 #endif
 
+/* Drop the sector being received and ask the peer to send it again from its first packet. */
+static void ble_ota_sector_resend(const struct os_mbuf *om)
+{
+    uint8_t cmd_ack[CMD_ACK_LENGTH] = {
+        om->om_data[0], om->om_data[1], 0x02, 0x00, cur_sector & 0xff, (cur_sector & 0xff00) >> 8
+    };
+    uint16_t crc16 = crc16_ccitt(cmd_ack, 18);
+
+    cmd_ack[18] = crc16 & 0xff;
+    cmd_ack[19] = (crc16 & 0xff00) >> 8;
+    cur_packet = 0;
+    fw_buf_offset = 0;
+    if (fw_buf)
+        memset(fw_buf, 0x0, ota_block_size);
+    sector_sequence_error = false;
+#ifndef CONFIG_OTA_WITH_PROTOCOMM
+    esp_ble_ota_notification_data(
+        connection_handle, attribute_handle, cmd_ack,
+        find_ota_char_and_desr_by_handle(attribute_handle)
+    );
+#endif
+}
+
 static esp_err_t esp_ble_ota_write_chr(struct os_mbuf *om)
 {
 #ifndef CONFIG_OTA_WITH_PROTOCOMM
@@ -241,24 +264,7 @@ static esp_err_t esp_ble_ota_write_chr(struct os_mbuf *om)
                 TAG, "%s - sector index error, cur: %" PRIu32 ", recv: %u", __func__, cur_sector,
                 recv_sector
             );
-            cmd_ack[0] = om->om_data[0];
-            cmd_ack[1] = om->om_data[1];
-            cmd_ack[2] = 0x02; // sector index error
-            cmd_ack[3] = 0x00;
-            cmd_ack[4] = cur_sector & 0xff;
-            cmd_ack[5] = (cur_sector & 0xff00) >> 8;
-            crc16 = crc16_ccitt(cmd_ack, 18);
-            cmd_ack[18] = crc16 & 0xff;
-            cmd_ack[19] = (crc16 & 0xff00) >> 8;
-            /* Match sender retry: sector restarts at packet 0. */
-            cur_packet = 0;
-            fw_buf_offset = 0;
-            if (fw_buf)
-                memset(fw_buf, 0x0, ota_block_size);
-            sector_sequence_error = false;
-#ifndef CONFIG_OTA_WITH_PROTOCOMM
-            esp_ble_ota_notification_data(connection_handle, attribute_handle, cmd_ack, ota_char);
-#endif
+            ble_ota_sector_resend(om);
             return ESP_ERR_INVALID_STATE;
         }
     }
@@ -272,26 +278,7 @@ static esp_err_t esp_ble_ota_write_chr(struct os_mbuf *om)
                     "sector %" PRIu32,
                     __func__, cur_sector
                 );
-                cmd_ack[0] = om->om_data[0];
-                cmd_ack[1] = om->om_data[1];
-                cmd_ack[2] = 0x02; /* retry sector (same status byte as sector
-                                      index error) */
-                cmd_ack[3] = 0x00;
-                cmd_ack[4] = cur_sector & 0xff;
-                cmd_ack[5] = (cur_sector & 0xff00) >> 8;
-                crc16 = crc16_ccitt(cmd_ack, 18);
-                cmd_ack[18] = crc16 & 0xff;
-                cmd_ack[19] = (crc16 & 0xff00) >> 8;
-                sector_sequence_error = false;
-                cur_packet = 0;
-                fw_buf_offset = 0;
-                if (fw_buf)
-                    memset(fw_buf, 0x0, ota_block_size);
-#ifndef CONFIG_OTA_WITH_PROTOCOMM
-                esp_ble_ota_notification_data(
-                    connection_handle, attribute_handle, cmd_ack, ota_char
-                );
-#endif
+                ble_ota_sector_resend(om);
                 return ESP_ERR_INVALID_STATE;
             }
             ESP_LOGD(TAG, "last packet");
@@ -424,22 +411,7 @@ write_ota_data:
                 TAG, "%s: sector %" PRIu32 " refused: %s", __func__, cur_sector,
                 esp_err_to_name(ferr)
             );
-            fw_buf_offset = 0;
-            memset(fw_buf, 0x0, ota_block_size);
-            cur_packet = 0;
-            sector_sequence_error = false;
-#ifndef CONFIG_OTA_WITH_PROTOCOMM
-            cmd_ack[0] = om->om_data[0];
-            cmd_ack[1] = om->om_data[1];
-            cmd_ack[2] = 0x02;
-            cmd_ack[3] = 0x00;
-            cmd_ack[4] = cur_sector & 0xff;
-            cmd_ack[5] = (cur_sector & 0xff00) >> 8;
-            crc16 = crc16_ccitt(cmd_ack, 18);
-            cmd_ack[18] = crc16 & 0xff;
-            cmd_ack[19] = (crc16 & 0xff00) >> 8;
-            esp_ble_ota_notification_data(connection_handle, attribute_handle, cmd_ack, ota_char);
-#endif
+            ble_ota_sector_resend(om);
             return ferr;
         }
 #endif
