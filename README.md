@@ -8,11 +8,14 @@ published on the [ESP Component Registry](https://components.espressif.com/compo
 
 ## Changes from upstream
 
+- NimBLE only: the Bluedroid and protocomm backends are removed. With Bluedroid, use upstream
+  `espressif/ble_ota`.
 - Runs on an application-owned NimBLE host (`CONFIG_BLE_OTA_EXTERNAL_HOST`), e.g. alongside Matter.
 - Start, sector and end callbacks: the application can refuse a transfer, ask for a sector again and
   report whether the image was accepted.
 - Encrypted link required on every characteristic, acks sent as notifications.
 - Sector CRC checked: a lost packet makes the device ask for the sector again.
+- Announced length enforced: extra firmware aborts the transfer, an early STOP is refused.
 - ESP32-S31 support.
 
 ## Quick start
@@ -38,6 +41,7 @@ starts. `esp_ble_ota_gatt_register()` adds it later instead, but needs
 | API reference   | [`ble_ota/include/ble_ota.h`](ble_ota/include/ble_ota.h) |
 | Minimal example | [`ble_ota/examples/minimal/`](ble_ota/examples/minimal/) |
 | Changelog       | [`ble_ota/CHANGELOG.md`](ble_ota/CHANGELOG.md)           |
+| Security audit  | [`security/`](security/)                                 |
 
 ## Tests
 
