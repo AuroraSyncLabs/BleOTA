@@ -17,6 +17,8 @@
 #define CONN_HANDLE 1
 #define ACK_LENGTH 20
 #define LAST_PACKET 0xff
+#define SECTOR_SIZE 4096
+#define CHUNK 512
 
 #define CMD_START 0x0001
 #define CMD_STOP 0x0002
@@ -140,6 +142,27 @@ static int send_packet(uint16_t sector, uint8_t packet, const uint8_t *data, uin
     memcpy(&buf[3], data, len);
     if (packet != LAST_PACKET)
         return write_chr(RECV_FW_CHAR, buf, 3 + len);
+    buf[3 + len] = crc & 0xff;
+    buf[4 + len] = crc >> 8;
+    return write_chr(RECV_FW_CHAR, buf, 5 + len);
+}
+
+/* Sends one sector in CHUNK-byte packets, the last packet ending with the sector CRC16. */
+static int send_sector(uint16_t sector, const uint8_t *data, size_t len)
+{
+    uint8_t buf[3 + CHUNK + 2] = {sector & 0xff, sector >> 8};
+    uint16_t crc = crc16_ccitt(data, len);
+    int rc = 0;
+
+    for (uint8_t packet = 0; len > CHUNK && rc == 0; packet++, data += CHUNK, len -= CHUNK) {
+        buf[2] = packet;
+        memcpy(&buf[3], data, CHUNK);
+        rc = write_chr(RECV_FW_CHAR, buf, 3 + CHUNK);
+    }
+    if (rc != 0)
+        return rc;
+    buf[2] = LAST_PACKET;
+    memcpy(&buf[3], data, len);
     buf[3 + len] = crc & 0xff;
     buf[4 + len] = crc >> 8;
     return write_chr(RECV_FW_CHAR, buf, 5 + len);
@@ -291,6 +314,20 @@ TEST_CASE("packet header is read from the whole mbuf chain", "[ble_ota][security
     TEST_ASSERT_EQUAL_INT(0, write_mbuf(RECV_FW_CHAR, &head));
     TEST_ASSERT_EQUAL_INT(1, rec.sectors);
     assert_ack(RECV_FW_CHAR, 0, SECTOR_STORED, 0);
+}
+
+TEST_CASE("sector larger than 4096 bytes is refused", "[ble_ota][security]")
+{
+    static uint8_t data[SECTOR_SIZE + 2];
+
+    for (size_t i = 0; i < sizeof(data); i++)
+        data[i] = i;
+    send_command(CMD_START, 3 * SECTOR_SIZE);
+    TEST_ASSERT_EQUAL_INT(0, send_sector(0, data, SECTOR_SIZE));
+    TEST_ASSERT_EQUAL_UINT32(SECTOR_SIZE, rec.sector_length);
+
+    TEST_ASSERT_NOT_EQUAL_INT(0, send_sector(1, data, sizeof(data)));
+    TEST_ASSERT_EQUAL_INT(1, rec.sectors);
 }
 
 TEST_CASE("sector refused by the application is asked again", "[ble_ota]")
