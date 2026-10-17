@@ -35,12 +35,12 @@ starts. `esp_ble_ota_gatt_register()` adds it later instead, but needs
 |-----------------|----------------------------------------------------------|
 | BLE protocol    | [`ble_ota/PROTOCOL.md`](ble_ota/PROTOCOL.md)             |
 | API reference   | [`ble_ota/include/ble_ota.h`](ble_ota/include/ble_ota.h) |
-| Minimal example | [`ble_ota/test_app/`](ble_ota/test_app/)                 |
+| Minimal example | [`ble_ota/examples/minimal/`](ble_ota/examples/minimal/) |
 | Changelog       | [`ble_ota/CHANGELOG.md`](ble_ota/CHANGELOG.md)           |
 
 ## Tests
 
-CI runs on every pull request: formatting, `idf.py clang-check`, unit tests on QEMU and the `test_app`
+CI runs on every pull request: formatting, `idf.py clang-check`, unit tests on QEMU and the example
 builds. Unit tests live in `ble_ota/test/` and run through `ble_ota/test_apps/` with
 [pytest](https://docs.espressif.com/projects/esp-idf/en/stable/esp32/contribute/esp-idf-tests-with-pytest.html)
 (`install.sh --enable-ci`, plus `idf_tools.py install qemu-riscv32` for QEMU). From `ble_ota/`:

@@ -29,12 +29,12 @@ jobs:
       - uses: actions/checkout@v5
       - name: Run idf.py clang-check
         shell: bash
-        working-directory: ble_ota/test_app
+        working-directory: ble_ota/examples/minimal
         run: |
           $IDF_PATH/tools/idf_tools.py install esp-clang
           . $IDF_PATH/export.sh
           idf.py set-target esp32c6
-          idf.py clang-check --exit-code --include-paths "$(realpath ..)" \
+          idf.py clang-check --exit-code --include-paths "$(realpath ../..)" \
             --exclude-paths "$(realpath managed_components)" \
             --run-clang-tidy-options "-header-filter=ble_ota/"
           count=$(grep -cE ': (warning|error): .*\[' warnings.txt || true)
@@ -76,11 +76,12 @@ jobs:
           path: ble_ota/report.xml
 
   build:
-    name: Build test_app (${{ matrix.target }}, IDF ${{ matrix.idf }})
+    name: Build ${{ matrix.example }} (${{ matrix.target }}, IDF ${{ matrix.idf }})
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
+        example: [minimal]
         target: [esp32c6, esp32s31]
         idf: [v6.1]
     steps:
@@ -89,6 +90,6 @@ jobs:
         with:
           esp_idf_version: ${{ matrix.idf }}
           target: ${{ matrix.target }}
-          path: ble_ota/test_app
+          path: ble_ota/examples/${{ matrix.example }}
           # esp32s31 is a preview target.
           command: idf.py --preview build
