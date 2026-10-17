@@ -1,3 +1,72 @@
+## v1.0.0 - 2026.10.17
+
+Breaking changes:
+- NimBLE only: the Bluedroid and protocomm backends are removed, with `esp_ble_ota_write()`,
+  `esp_ble_ota_set_sizes()`, `esp_ble_ota_finish()`, `CONFIG_OTA_WITH_PROTOCOMM` and the
+  `espressif/cjson` dependency.
+
+Bugfix:
+- Plain OTA enforces the announced length: firmware beyond it aborts the transfer, a STOP without a
+  running transfer or before the whole firmware is refused (V05).
+- Read the packet header from the whole mbuf chain (V06).
+- A START during a transfer aborts it and calls the abort callback (V08).
+- Refuse sectors larger than 4096 bytes instead of acking them and truncating them (V09).
+
+## v0.5.1 - 2026.10.17
+
+Bugfix:
+- Unit tests: define `crc16_ccitt` before its first use.
+
+## v0.5.0 - 2026.10.17
+
+Breaking changes:
+- The sector CRC16 is checked: a wrong CRC (e.g. a lost packet) makes the device ask for the sector
+  again.
+
+Features:
+- Unity tests run on QEMU, minimal example in `examples/minimal`.
+
+Bugfix:
+- Reject commands shorter than 20 bytes with the ATT error `0x0D`.
+- Remove a debug `printf` on STOP.
+
+## v0.4.0 - 2026.10.15
+
+Features:
+- `esp_ble_ota_gatt_svcs()` returns the OTA service table, to register before the GATT server
+  starts. `CONFIG_BLE_OTA_EXTERNAL_HOST` no longer requires `CONFIG_BT_NIMBLE_DYNAMIC_SERVICE`, only
+  `esp_ble_ota_gatt_register()` does.
+
+## v0.3.0 - 2026.10.15
+
+Breaking changes:
+- Acks are notifications instead of indications.
+- Every characteristic requires an encrypted link.
+- Pre-encrypted OTA: the component releases the decrypt handle on abort and disconnect, the
+  application must no longer call `esp_encrypted_img_decrypt_abort()`.
+
+Features:
+- `CONFIG_BLE_OTA_EXTERNAL_HOST` runs the profile on an application-owned NimBLE host, through
+  `esp_ble_ota_gatt_register()`, `esp_ble_ota_on_connect()`, `esp_ble_ota_on_disconnect()` and
+  `esp_ble_ota_on_subscribe()`.
+- Start, sector, end and abort callbacks. `esp_ble_ota_end_ack()` sends the STOP ack once the
+  application has verified the image.
+- Pre-encrypted OTA: `esp_ble_ota_set_decrypt_cfg()` opens a decrypt handle on every START. A STOP
+  is refused when the image is incomplete or not authentic, a sector that cannot be decrypted or
+  stored aborts the transfer (sector ack `0x0003`).
+- Write without response on RECV_FW.
+- `PROTOCOL.md` describes the BLE protocol.
+
+Bugfix:
+- A disconnect resets the transfer state.
+- Pre-encrypted OTA: refuse a START announcing 512 bytes or less.
+
+## v0.1.19 - 2026.10.14
+
+Features:
+- Fork of `espressif/ble_ota` v0.1.18, published as `aurorasynclabs/ble_ota`.
+- Add support for ESP32-S31.
+
 ## v0.1.18 - 2026.09.09
 
 Bugfix:
