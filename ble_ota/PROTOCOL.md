@@ -18,7 +18,7 @@ otherwise.
 
 ## Flow
 
-1. Connect, bond, request MTU 517, subscribe.
+1. Connect, pair, request MTU 517, subscribe.
 2. Write START on COMMAND, wait for its ack. Refused: stop.
 3. Send the firmware in 4096-byte sectors (the last one may be shorter, a longer one is rejected). After
    each sector, wait for its ack:
@@ -26,14 +26,15 @@ otherwise.
    - `0x0002`: resend from the sector given in the ack.
    - `0x0003`: transfer aborted (plain OTA: the sector goes beyond the announced length;
      pre-encrypted OTA: it could not be decrypted or stored): stop.
-4. Write STOP on COMMAND, wait for its ack (sent once the image is verified, can take a few seconds).
+4. Write STOP on COMMAND, wait for its ack. It comes at once, or a few seconds later when the
+   application verifies the image first (`esp_ble_ota_set_end_cb()`).
    - Accepted: the application took the image and usually reboots into it.
-   - Refused: the update failed, nothing changed. A STOP is refused when no transfer is running or
-     the firmware is incomplete (see Command).
+   - Refused: the update failed, nothing changed. A STOP is refused when no transfer is running,
+     the firmware is incomplete (see Command) or the application rejects the image.
 5. Reconnect and check the firmware version.
 
-A disconnect aborts the transfer: restart from START. A START during a transfer aborts it and starts
-a new one.
+A disconnect aborts the transfer: restart from START. A START during a transfer aborts it, then is
+accepted or refused like any other START.
 
 ## Command (write on COMMAND, 20 bytes)
 
