@@ -1,5 +1,6 @@
 /*
  * SPDX-FileCopyrightText: 2019-2023 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileContributor: 2026 AnabolicRoo
  *
  * SPDX-License-Identifier: Apache-2.0
  */
