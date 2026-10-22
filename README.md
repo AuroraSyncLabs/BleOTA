@@ -6,6 +6,9 @@ ESP-IDF component to update firmware over BLE. Fork of Espressif's
 [`ble_ota`](https://github.com/espressif/esp-iot-solution/tree/master/components/bluetooth/ble_profiles/esp/ble_ota),
 published on the [ESP Component Registry](https://components.espressif.com/components/aurorasynclabs/ble_ota).
 
+Maintained as-is, for AuroraSync's own firmware: issues and pull requests are read, with no promised reply time.
+Licensed under [Apache-2.0](LICENSE), like upstream.
+
 ## Changes from upstream
 
 - NimBLE only: the Bluedroid and protocomm backends are removed. With Bluedroid, use upstream
