@@ -74,3 +74,15 @@ uvx gcovr==8.7 --gcov-executable riscv32-esp-elf-gcov --filter src/ --print-summ
 |:----------------------------------------------------------------------------------------------------------------:|
 
 </div>
+
+## Acknowledgments
+
+Built on Espressif's
+[`ble_ota`](https://github.com/espressif/esp-iot-solution/commits/master/components/bluetooth/ble_profiles/esp/ble_ota)
+and the work of its contributors.
+
+<div align="center">
+
+[![Contributors](https://contrib.rocks/image?repo=AuroraSyncLabs/BleOTA)](https://github.com/AuroraSyncLabs/BleOTA/graphs/contributors)
+
+</div>
