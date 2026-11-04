@@ -1,0 +1,3 @@
+# Serialized protobuf descriptors in the protocomm files, removed since.
+ff8054ccef4e0da6839c263770980275194c5db0:ble_ota/python/constants_pb2.py:generic-api-key:22
+ff8054ccef4e0da6839c263770980275194c5db0:ble_ota/python/ota_send_file_pb2.py:generic-api-key:23

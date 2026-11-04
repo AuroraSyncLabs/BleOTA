@@ -48,14 +48,17 @@ starts. `esp_ble_ota_gatt_register()` adds it later instead, but needs
 
 ## Tests
 
-CI runs on every pull request: formatting, `idf.py clang-check`, unit tests on QEMU and the example
-builds. Unit tests live in `ble_ota/test/` and run through `ble_ota/test_apps/` with
+CI runs on every pull request: formatting, a secret scan of the history, `idf.py clang-check`, unit
+tests on QEMU and the example builds. Unit tests live in `ble_ota/test/` and run through
+`ble_ota/test_apps/` with
 [pytest](https://docs.espressif.com/projects/esp-idf/en/stable/esp32/contribute/esp-idf-tests-with-pytest.html)
 (`install.sh --enable-ci`, plus `idf_tools.py install qemu-riscv32` for QEMU). From `ble_ota/`:
 
 ```shell
 # Formatting, pinned version through uv (https://docs.astral.sh/uv/)
 git ls-files '*.c' '*.h' | xargs uvx clang-format==23.1.1 --style=file -i
+# Secrets (https://github.com/gitleaks/gitleaks), accepted findings in .gitleaksignore
+gitleaks git --redact ..
 # QEMU, as in CI
 idf-ci build run -p test_apps -t esp32c3 -m qemu && pytest -m qemu --target esp32c3
 ```
