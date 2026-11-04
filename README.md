@@ -38,33 +38,16 @@ starts. `esp_ble_ota_gatt_register()` adds it later instead, but needs
 `CONFIG_BT_NIMBLE_DYNAMIC_SERVICE=y` and can exhaust the NimBLE client configuration pool (see
 `ble_ota.h`).
 
-| Documentation   | Where                                                    |
-|-----------------|----------------------------------------------------------|
-| BLE protocol    | [`ble_ota/PROTOCOL.md`](ble_ota/PROTOCOL.md)             |
-| API reference   | [`ble_ota/include/ble_ota.h`](ble_ota/include/ble_ota.h) |
-| Minimal example | [`ble_ota/examples/minimal/`](ble_ota/examples/minimal/) |
-| Changelog       | [`ble_ota/CHANGELOG.md`](ble_ota/CHANGELOG.md)           |
-| Security audit  | [`security/`](security/)                                 |
-
-## Tests
-
-CI runs on every pull request: formatting, a secret scan of the history, `idf.py clang-check`, unit
-tests on QEMU with their coverage and the example builds. Unit tests live in `ble_ota/test/` and
-run through `ble_ota/test_apps/` with
-[pytest](https://docs.espressif.com/projects/esp-idf/en/stable/esp32/contribute/esp-idf-tests-with-pytest.html)
-(`install.sh --enable-ci`, plus `idf_tools.py install qemu-riscv32` for QEMU). From `ble_ota/`:
-
-```shell
-# Formatting, pinned version through uv (https://docs.astral.sh/uv/)
-git ls-files '*.c' '*.h' | xargs uvx clang-format==23.1.1 --style=file -i
-# Secrets (https://github.com/gitleaks/gitleaks), accepted findings in .gitleaksignore
-gitleaks git --redact ..
-# QEMU, as in CI
-idf-ci build run -p test_apps -t esp32c3 -m qemu && pytest -m qemu --target esp32c3
-# Coverage of src/ after the tests, HTML report in test_apps/build/coverage/
-uvx gcovr==8.7 --gcov-executable riscv32-esp-elf-gcov --filter src/ --print-summary \
-  --html-details test_apps/build/coverage/ test_apps
-```
+| Documentation        | Where                                                     |
+|----------------------|-----------------------------------------------------------|
+| BLE protocol         | [`ble_ota/PROTOCOL.md`](ble_ota/PROTOCOL.md)              |
+| API reference        | [`ble_ota/include/ble_ota.h`](ble_ota/include/ble_ota.h)  |
+| Minimal example      | [`ble_ota/examples/minimal/`](ble_ota/examples/minimal/)  |
+| Changelog            | [`ble_ota/CHANGELOG.md`](ble_ota/CHANGELOG.md)            |
+| Contributing         | [`CONTRIBUTING.md`](CONTRIBUTING.md)                      |
+| Building and testing | [`CONTRIBUTING.md`](CONTRIBUTING.md#building-and-testing) |
+| Security audit       | [`security/`](security/)                                  |
+| License              | [`LICENSE`](LICENSE)                                      |
 
 ## Maintainer
 
