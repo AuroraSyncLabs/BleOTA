@@ -15,6 +15,7 @@ with no promised reply time.
 | `ble_ota/examples/minimal/`           | Example project using the component |
 | `ble_ota/test/`, `ble_ota/test_apps/` | Unit tests and the app running them |
 | `ble_ota/Kconfig`                     | Component configuration             |
+| `tools/`                              | Test client, not published          |
 | `security/`                           | Security audit reports              |
 
 CI builds and tests with ESP-IDF v6.1.
