@@ -1,0 +1,14 @@
+# Keeps the gcov_info pointers of ble_ota between _gcov_info_start and _gcov_info_end.
+[sections:gcov_info]
+entries:
+    gcov_info
+
+[scheme:gcov]
+entries:
+    gcov_info -> flash_rodata
+
+[mapping:ble_ota_gcov]
+archive: libble_ota.a
+entries:
+    * (gcov);
+        gcov_info -> flash_rodata KEEP() SURROUND(gcov_info)
