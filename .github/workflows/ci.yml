@@ -86,11 +86,22 @@ jobs:
         run: |
           . $IDF_PATH/export.sh
           pytest -m qemu --target esp32c3 --junitxml=report.xml
+      - name: Report the coverage
+        shell: bash
+        working-directory: ble_ota
+        run: |
+          . $IDF_PATH/export.sh
+          uvx gcovr==8.7 --gcov-executable riscv32-esp-elf-gcov --filter src/ --print-summary \
+            --markdown-summary "$GITHUB_STEP_SUMMARY" --html-details test_apps/build/coverage/ test_apps
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: unit-test-report
           path: ble_ota/report.xml
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: ble_ota/test_apps/build/coverage/
 
   build:
     name: Build ${{ matrix.example }} (${{ matrix.target }}, IDF ${{ matrix.idf }})
