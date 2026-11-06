@@ -174,6 +174,21 @@ Releases are made by the maintainer:
 
 The upload component workflow then publishes the component to the ESP Component Registry.
 
+## Repository traffic
+
+GitHub keeps 14 days of traffic. The traffic workflow (`.github/workflows/traffic.yml`) saves it every Monday,
+or on demand from the Actions tab, to the [`traffic`](https://github.com/AuroraSyncLabs/BleOTA/tree/traffic) branch:
+
+| File                                       | Content                                          |
+|--------------------------------------------|--------------------------------------------------|
+| `views.csv`, `clones.csv`                  | Views and clones per day, updated by each run    |
+| `repository.csv`                           | Stars, forks and watchers on each run day        |
+| `referrers/<date>.csv`, `paths/<date>.csv` | Top 10 referrers and pages over the last 14 days |
+
+It reads the traffic with the `TRAFFIC_TOKEN` secret: a fine-grained token created by an organization owner,
+with resource owner `AuroraSyncLabs`, access to the `BleOTA` repository and the "Administration: read" permission.
+Renew it before it expires, or the workflow fails.
+
 ## Questions
 
 If something is unclear, open an issue or reach out to the [maintainer](README.md#maintainer).
