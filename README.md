@@ -38,17 +38,18 @@ starts. `esp_ble_ota_gatt_register()` adds it later instead, but needs
 `CONFIG_BT_NIMBLE_DYNAMIC_SERVICE=y` and can exhaust the NimBLE client configuration pool (see
 `ble_ota.h`).
 
-| Documentation        | Where                                                     |
-|----------------------|-----------------------------------------------------------|
-| BLE protocol         | [`ble_ota/PROTOCOL.md`](ble_ota/PROTOCOL.md)              |
-| API reference        | [`ble_ota/include/ble_ota.h`](ble_ota/include/ble_ota.h)  |
-| Minimal example      | [`ble_ota/examples/minimal/`](ble_ota/examples/minimal/)  |
-| Test client          | [`tools/ble_ota.py`](tools/ble_ota.py)                    |
-| Changelog            | [`ble_ota/CHANGELOG.md`](ble_ota/CHANGELOG.md)            |
-| Contributing         | [`CONTRIBUTING.md`](CONTRIBUTING.md)                      |
-| Building and testing | [`CONTRIBUTING.md`](CONTRIBUTING.md#building-and-testing) |
-| Security audit       | [`security/`](security/)                                  |
-| License              | [`LICENSE`](LICENSE)                                      |
+| Documentation        | Where                                                                     |
+|----------------------|---------------------------------------------------------------------------|
+| BLE protocol         | [`ble_ota/PROTOCOL.md`](ble_ota/PROTOCOL.md)                              |
+| API reference        | [`ble_ota/include/ble_ota.h`](ble_ota/include/ble_ota.h)                  |
+| Minimal example      | [`ble_ota/examples/minimal/`](ble_ota/examples/minimal/)                  |
+| Test client          | [`tools/ble_ota.py`](tools/ble_ota.py)                                    |
+| Changelog            | [`ble_ota/CHANGELOG.md`](ble_ota/CHANGELOG.md)                            |
+| Contributing         | [`CONTRIBUTING.md`](CONTRIBUTING.md)                                      |
+| Building and testing | [`CONTRIBUTING.md`](CONTRIBUTING.md#building-and-testing)                 |
+| Security audit       | [`security/`](security/)                                                  |
+| Repository traffic   | [`traffic` branch](https://github.com/AuroraSyncLabs/BleOTA/tree/traffic) |
+| License              | [`LICENSE`](LICENSE)                                                      |
 
 ## Maintainer
 
