@@ -1,0 +1,58 @@
+name: Traffic
+on:
+  schedule:
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency: traffic
+
+jobs:
+  save:
+    name: Save the traffic
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v5
+      - name: Switch to the traffic branch
+        run: |
+          if git fetch -q --depth=1 origin traffic; then
+            git switch -q -C traffic FETCH_HEAD
+          else
+            git switch -q --orphan traffic
+          fi
+      - name: Fetch the traffic
+        env:
+          # Fine-grained token with "Administration: read", which GITHUB_TOKEN cannot get
+          GH_TOKEN: ${{ secrets.TRAFFIC_TOKEN }}
+        run: |
+          day=$(date -u +%F)
+          api() { gh api "repos/$GITHUB_REPOSITORY$1" --jq "$2 | @csv"; }
+          # Rows from stdin replace the saved rows of the same date
+          merge() {
+            { cat; [ ! -f "$1" ] || tail -n +2 "$1"; } | awk -F, '!seen[$1]++' | sort > "$RUNNER_TEMP/rows"
+            { echo "$2"; cat "$RUNNER_TEMP/rows"; } > "$1"
+          }
+          snapshot() { mkdir -p "$1"; { echo "$2"; cat; } > "$1/$day.csv"; }
+
+          api /traffic/views '.views[] | [.timestamp[:10], .count, .uniques]' | merge views.csv date,count,uniques
+          api /traffic/clones '.clones[] | [.timestamp[:10], .count, .uniques]' | merge clones.csv date,count,uniques
+          # watchers_count is the star count, subscribers_count the watchers
+          api '' "[\"$day\", .stargazers_count, .forks_count, .subscribers_count]" \
+            | merge repository.csv date,stars,forks,watchers
+          api /traffic/popular/referrers '.[] | [.referrer, .count, .uniques]' | snapshot referrers referrer,count,uniques
+          api /traffic/popular/paths '.[] | [.path, .title, .count, .uniques]' | snapshot paths path,title,count,uniques
+      - name: Commit the changes
+        run: |
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No change"
+            exit 0
+          fi
+          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+            commit -qm "chore: save the traffic"
+          git push -q origin traffic
